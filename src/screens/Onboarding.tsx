@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckIcon, ShieldIcon } from '../components/Icons';
 import { BackButton, StepHeader } from '../components/ui';
 import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
-import { isValidContact, normalizeContact, updateAccount } from '../lib/logic';
+import { isValidContact, normalizeContact, setDeviceOwner, updateAccount } from '../lib/logic';
+import { KaziLock, isNativeAndroid, useLockStatus } from '../lib/native';
 import { formatClock, formatClockShort } from '../lib/time';
 import { run, toast, useAccount } from '../lib/store';
 import type { Mode } from '../lib/types';
@@ -66,13 +67,22 @@ export function Permissions() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const forChild = params.get('for') === 'child';
-  const { usage, accessibility } = me.permissions;
+  const phone = useLockStatus();
+  // In the Android app these are the phone's real settings; on the web they are a walkthrough.
+  const { usage, accessibility } = isNativeAndroid ? phone ?? { usage: false, accessibility: false } : me.permissions;
 
   function allow(key: 'usage' | 'accessibility') {
+    if (isNativeAndroid) {
+      const open = key === 'usage' ? KaziLock.openUsageAccessSettings() : KaziLock.openAccessibilitySettings();
+      open.catch(() => toast('Open Settings and allow Kazikwanza there.'));
+      return;
+    }
     run((d) => updateAccount(d, me.id, { permissions: { ...me.permissions, [key]: true } }));
   }
 
   function next() {
+    // This phone now enforces this account's rules.
+    run((d) => setDeviceOwner(updateAccount(d, me.id, { permissions: { usage, accessibility } }), me.id));
     if (forChild) {
       run((d) => updateAccount(d, me.id, { onboarded: true }));
       navigate('/child', { replace: true });
@@ -122,6 +132,12 @@ export function Permissions() {
         <ShieldIcon size={20} color="#15803D" />
         <span>We never read your messages, posts or what you watch. We only count scrolls.</span>
       </div>
+      {isNativeAndroid && !accessibility && (
+        <p className="small">
+          In Settings, open <strong>Installed apps</strong> (or <strong>Downloaded apps</strong>), tap <strong>Kazikwanza app lock</strong> and turn it on. If
+          Android says the setting is restricted, open Kazikwanza's App info, tap ⋮ and choose <strong>Allow restricted settings</strong> first.
+        </p>
+      )}
       <div className="spacer" />
       <button className="btn btn-primary" onClick={next} disabled={!usage || !accessibility}>
         Continue

@@ -22,6 +22,7 @@ import {
   todaysTasks,
 } from '../lib/logic';
 import { run, toast, useAccount, useData, useNow, useStore } from '../lib/store';
+import { KaziLock, isNativeAndroid, pumpNative } from '../lib/native';
 import { formatClock, formatMinSec } from '../lib/time';
 import type { Account } from '../lib/types';
 import { homePath } from './Tasks';
@@ -34,22 +35,50 @@ function statusText(me: Account, app: LockableApp, now: number): string {
   return app.kind === 'scrolls' ? `${me.scrolls} scrolls` : `${minutesLeft(me, now)} min`;
 }
 
+/**
+ * Opens an app the person has access to: the real app inside the Android
+ * build (the lock service takes over there), or the built-in demo on the web.
+ * Returns false when the real app isn't installed.
+ */
+async function launch(app: LockableApp, navigate: (to: string, opts?: { replace?: boolean }) => void, replace = false) {
+  if (!isNativeAndroid) {
+    navigate(`/app/${app.id}`, { replace });
+    return true;
+  }
+  const { opened } = await KaziLock.openApp({ packages: app.packages }).catch(() => ({ opened: false }));
+  if (!opened) toast(`${app.name} isn't installed on this phone`);
+  return opened;
+}
+
 export function Launcher() {
   const me = useAccount();
   const now = useNow(1000);
   const navigate = useNavigate();
+
+  async function open(app: LockableApp, access: ReturnType<typeof accessFor>) {
+    if (access === 'locked') {
+      navigate(`/locked/${app.id}`);
+      return;
+    }
+    await launch(app, navigate);
+  }
+
   return (
     <main className="screen">
       <BackButton fallback={homePath(me)} />
       <div className="stack-8">
         <h1 className="h1">Your apps</h1>
-        <p className="lead">Open an app the way you would on your phone. Each swipe to a new post uses 1 scroll; games use screen time.</p>
+        <p className="lead">
+          {isNativeAndroid
+            ? 'Open an app from here or from your home screen. Each swipe to a new post uses 1 scroll; games use screen time.'
+            : 'Open an app the way you would on your phone. Each swipe to a new post uses 1 scroll; games use screen time.'}
+        </p>
       </div>
       <div className="launcher">
         {APPS.map((a) => {
           const access = accessFor(me, a.id, now);
           return (
-            <button key={a.id} onClick={() => navigate(access === 'locked' ? `/locked/${a.id}` : `/app/${a.id}`)} aria-label={`Open ${a.name}`}>
+            <button key={a.id} onClick={() => open(a, access)} aria-label={`Open ${a.name}`}>
               <span className="app-icon" style={{ background: a.color }}>
                 {a.name.charAt(0)}
                 {access === 'locked' && (
@@ -286,9 +315,9 @@ export function Locked() {
             See my tasks
           </Link>
         ) : (
-          <Link to={`/app/${app.id}`} className="btn btn-primary" replace>
+          <button className="btn btn-primary" onClick={() => void launch(app, navigate, true)}>
             Open {app.name}
-          </Link>
+          </button>
         )}
         {access === 'locked' &&
           (parent ? (
@@ -372,7 +401,10 @@ export function Emergency() {
           className="btn btn-primary"
           disabled={!ready || left === 0}
           onClick={() => {
-            if (run((d, t) => emergencyUnlock(d, me.id, app.id, t))) navigate(`/app/${app.id}`, { replace: true });
+            if (run((d, t) => emergencyUnlock(d, me.id, app.id, t))) {
+              // Hand the new balance to the phone before the real app opens.
+              void pumpNative().then(() => launch(app, navigate, true));
+            }
           }}
         >
           {ready ? `Unlock ${app.name}` : `Unlock in ${Math.ceil(secondsLeft)}s`}

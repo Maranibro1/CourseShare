@@ -4,6 +4,8 @@ import {
   QUESTIONS_FALLBACK_MS,
   accessFor,
   addChildTask,
+  applyNativeEvents,
+  nativeRules,
   addTask,
   answerTimeRequest,
   approveTask,
@@ -285,5 +287,46 @@ describe('family', () => {
     expect(() => askForTime(data, leo, 'minecraft', T0)).toThrow();
     data = answerTimeRequest(data, data.timeRequests[0].id, mum, true, T0);
     expect(data.accounts[leo].screenSeconds).toBe(15 * 60);
+  });
+});
+
+describe('phone lock sync', () => {
+  it('charges phone usage once, even if the same events arrive twice', () => {
+    let { data, sam } = setup();
+    data = updateAccount(data, sam, { scrolls: 50, screenSeconds: 600 });
+    const events = [
+      { seq: 1, appId: 'tiktok', kind: 'scrolls' as const, amount: 30, session: 's1', at: T0 },
+      { seq: 2, appId: 'minecraft', kind: 'minutes' as const, amount: 150, session: 'm1', at: T0 },
+    ];
+    data = applyNativeEvents(data, sam, events, T0);
+    data = applyNativeEvents(data, sam, events, T0);
+    const a = data.accounts[sam];
+    expect(a.scrolls).toBe(20);
+    expect(a.screenSeconds).toBe(450);
+    expect(a.nativeSeq).toBe(2);
+    expect(a.ledger.find((l) => l.label === 'Scrolled TikTok')?.amount).toBe(-30);
+    expect(a.ledger.find((l) => l.label === 'Played Minecraft')?.amount).toBe(-3);
+    expect(nativeRules(a).ackSeq).toBe(2);
+  });
+
+  it('merges later events from the same visit into one history line and warns when low', () => {
+    let { data, sam } = setup();
+    data = updateAccount(data, sam, { scrolls: 15 });
+    data = applyNativeEvents(data, sam, [{ seq: 1, appId: 'instagram', kind: 'scrolls', amount: 3, session: 'v', at: T0 }], T0);
+    data = applyNativeEvents(data, sam, [{ seq: 2, appId: 'instagram', kind: 'scrolls', amount: 4, session: 'v', at: T0 }], T0);
+    const a = data.accounts[sam];
+    expect(a.scrolls).toBe(8);
+    expect(a.ledger.filter((l) => l.label === 'Scrolled Instagram')).toHaveLength(1);
+    expect(a.ledger[0].amount).toBe(-7);
+    expect(data.notifications.some((n) => n.text === 'You have 8 scrolls left')).toBe(true);
+  });
+
+  it('tells the phone exactly which packages to lock', () => {
+    const { data, sam } = setup();
+    const rules = nativeRules(data.accounts[sam]);
+    expect(rules.enabled).toBe(true);
+    expect(rules.apps.find((x) => x.id === 'tiktok')?.packages).toContain('com.zhiliaoapp.musically');
+    expect(rules.apps.map((x) => x.id)).not.toContain('x');
+    expect(rules.unlockTime).toBe('13:00');
   });
 });

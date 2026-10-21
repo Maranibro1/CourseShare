@@ -13,7 +13,8 @@ export function Wallet() {
   const now = useNow(1000);
   const stats = weekStats(data, me.id, now);
   const minutes = minutesLeft(me, now);
-  const history = me.ledger.slice(0, 25);
+  // Phone lines under 30 seconds round to 0 min; leave them out of the list.
+  const history = me.ledger.filter((l) => l.amount !== 0).slice(0, 25);
 
   return (
     <NavScreen>

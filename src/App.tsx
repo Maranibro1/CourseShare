@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes, matchPath, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { Toast } from './components/ui';
+import { useNativeBridge } from './lib/native';
 import { useDailyTick, useMe } from './lib/store';
 import type { Account } from './lib/types';
 import { AppView, Emergency, Launcher, Locked } from './screens/Apps';
@@ -42,6 +43,7 @@ function Gate({ children }: { children: ReactNode }) {
   const me = useMe();
   const { pathname } = useLocation();
   useDailyTick();
+  useNativeBridge();
 
   if (!me) {
     return matches(SIGNED_OUT, pathname) ? <>{children}</> : <Navigate to="/welcome" replace />;

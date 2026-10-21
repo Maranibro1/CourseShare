@@ -832,3 +832,85 @@ export function markNotificationsRead(data: AppData, accountId: string): AppData
     notifications: data.notifications.map((n) => (n.accountId === accountId && !n.read ? { ...n, read: true } : n)),
   };
 }
+
+/* ───────────────────────── Phone lock (Android) ───────────────────────── */
+
+/** Usage the phone's lock service recorded, as returned by the KaziLock plugin. */
+export interface NativeUsageEvent {
+  seq: number;
+  appId: string;
+  kind: RewardKind;
+  /** Scrolls swiped, or seconds of screen time. */
+  amount: number;
+  session: string;
+  at: number;
+}
+
+/** What the phone should enforce, sent to the KaziLock plugin. */
+export interface NativeRules {
+  enabled: boolean;
+  apps: { id: string; name: string; kind: RewardKind; packages: string[] }[];
+  scrolls: number;
+  screenSeconds: number;
+  unlockTime: string;
+  ackSeq: number;
+}
+
+export function setDeviceOwner(data: AppData, accountId: string): AppData {
+  account(data, accountId);
+  if (data.deviceOwnerId === accountId) return data;
+  return { ...data, deviceOwnerId: accountId };
+}
+
+export function nativeRules(a: Account): NativeRules {
+  return {
+    enabled: a.onboarded && a.lockedApps.length > 0,
+    apps: APPS.filter((x) => a.lockedApps.includes(x.id)).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
+    scrolls: a.scrolls,
+    screenSeconds: a.screenSeconds,
+    unlockTime: a.unlockTime ?? '',
+    ackSeq: a.nativeSeq ?? 0,
+  };
+}
+
+/**
+ * Charges usage recorded by the phone to the account. Safe to call with the
+ * same events twice: anything at or below the account's nativeSeq is skipped.
+ */
+export function applyNativeEvents(data: AppData, accountId: string, events: NativeUsageEvent[], now: number): AppData {
+  const a0 = data.accounts[accountId];
+  if (!a0) return data;
+  const fresh = events.filter((e) => e.seq > (a0.nativeSeq ?? 0)).sort((x, y) => x.seq - y.seq);
+  if (fresh.length === 0) return data;
+  const next = clone(data);
+  const a = account(next, accountId);
+  const today = dayKey(now);
+  for (const e of fresh) {
+    const app = getApp(e.appId);
+    const name = app?.name ?? e.appId;
+    const ledgerId = `n_${e.session}`;
+    const line = a.ledger.find((l) => l.id === ledgerId);
+    if (e.kind === 'scrolls') {
+      const n = Math.max(0, Math.round(e.amount));
+      const before = a.scrolls;
+      a.scrolls = Math.max(0, before - n);
+      if (line) line.amount -= n;
+      else pushLedger(a, { at: e.at, label: `Scrolled ${name}`, amount: -n, unit: 'scrolls' }, ledgerId);
+      if (before > LOW_SCROLLS && a.scrolls <= LOW_SCROLLS && a.scrolls > 0 && a.lowScrollNoticeDay !== today) {
+        a.lowScrollNoticeDay = today;
+        notify(next, accountId, `You have ${a.scrolls} scrolls left`, '/wallet', now);
+      }
+    } else {
+      const secs = Math.max(0, e.amount);
+      a.screenSeconds = Math.max(0, a.screenSeconds - secs);
+      if (line) {
+        line.seconds = (line.seconds ?? 0) + secs;
+        line.amount = -Math.round(line.seconds / 60);
+      } else {
+        pushLedger(a, { at: e.at, label: `Played ${name}`, amount: -Math.round(secs / 60), unit: 'minutes', seconds: secs }, ledgerId);
+      }
+    }
+    a.nativeSeq = e.seq;
+  }
+  return next;
+}

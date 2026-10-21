@@ -6,16 +6,18 @@ export interface LockableApp {
   /** Scrolling apps spend scrolls; other apps spend screen-time minutes. */
   kind: RewardKind;
   color: string;
+  /** Android package names, including regional builds of the same app. */
+  packages: string[];
 }
 
 export const APPS: LockableApp[] = [
-  { id: 'tiktok', name: 'TikTok', kind: 'scrolls', color: '#111827' },
-  { id: 'instagram', name: 'Instagram', kind: 'scrolls', color: '#BE185D' },
-  { id: 'youtube', name: 'YouTube', kind: 'scrolls', color: '#B91C1C' },
-  { id: 'x', name: 'X', kind: 'scrolls', color: '#18181B' },
-  { id: 'minecraft', name: 'Minecraft', kind: 'minutes', color: '#3F6212' },
-  { id: 'netflix', name: 'Netflix', kind: 'minutes', color: '#7F1D1D' },
-  { id: 'snapchat', name: 'Snapchat', kind: 'minutes', color: '#A16207' },
+  { id: 'tiktok', name: 'TikTok', kind: 'scrolls', color: '#111827', packages: ['com.zhiliaoapp.musically', 'com.ss.android.ugc.trill'] },
+  { id: 'instagram', name: 'Instagram', kind: 'scrolls', color: '#BE185D', packages: ['com.instagram.android', 'com.instagram.lite'] },
+  { id: 'youtube', name: 'YouTube', kind: 'scrolls', color: '#B91C1C', packages: ['com.google.android.youtube'] },
+  { id: 'x', name: 'X', kind: 'scrolls', color: '#18181B', packages: ['com.twitter.android', 'com.twitter.android.lite'] },
+  { id: 'minecraft', name: 'Minecraft', kind: 'minutes', color: '#3F6212', packages: ['com.mojang.minecraftpe'] },
+  { id: 'netflix', name: 'Netflix', kind: 'minutes', color: '#7F1D1D', packages: ['com.netflix.mediaclient'] },
+  { id: 'snapchat', name: 'Snapchat', kind: 'minutes', color: '#A16207', packages: ['com.snapchat.android'] },
 ];
 
 export const SCROLL_APPS = APPS.filter((a) => a.kind === 'scrolls');

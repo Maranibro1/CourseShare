@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ChevronIcon } from '../components/Icons';
 import { Avatar, BackButton, NavScreen, Sheet, Toggle } from '../components/ui';
 import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
-import { findAccountByContact, freeUnlockActive, requestsFor, signOut, updateAccount } from '../lib/logic';
+import { findAccountByContact, freeUnlockActive, requestsFor, setDeviceOwner, signOut, updateAccount } from '../lib/logic';
+import { KaziLock, isNativeAndroid, useLockStatus } from '../lib/native';
 import { run, toast, useAccount, useData } from '../lib/store';
 import { clockToday, formatClock } from '../lib/time';
 import type { LockableApp } from '../lib/apps';
@@ -17,6 +18,20 @@ export function Settings() {
   const [time, setTime] = useState(me.unlockTime ?? '13:00');
   const [noFree, setNoFree] = useState(me.unlockTime === null);
   const verifierName = me.verifier ? findAccountByContact(data, me.verifier.contact)?.name ?? me.verifier.contact : 'None';
+
+  const phone = useLockStatus();
+  const ownerIsMe = data.deviceOwnerId === me.id;
+  const ownerName = data.deviceOwnerId ? data.accounts[data.deviceOwnerId]?.name : undefined;
+  let phoneLockLabel = 'Checking…';
+  if (phone) phoneLockLabel = !phone.accessibility ? 'Off' : ownerIsMe ? 'On' : `On for ${ownerName ?? 'someone else'}`;
+
+  function phoneLock() {
+    if (!ownerIsMe) {
+      run((d) => setDeviceOwner(d, me.id));
+      toast('This phone now follows your rules');
+    }
+    if (!phone?.accessibility) KaziLock.openAccessibilitySettings().catch(() => toast('Open Settings > Accessibility to turn it on.'));
+  }
 
   const lockedHours = () => me.unlockTime !== null && !freeUnlockActive(me, Date.now());
 
@@ -90,6 +105,12 @@ export function Settings() {
           <span>Verifier</span>
           <span className="value">{verifierName}</span>
         </button>
+        {isNativeAndroid && (
+          <button className="row row-btn" onClick={phoneLock}>
+            <span>Phone lock</span>
+            <span className="value">{phoneLockLabel}</span>
+          </button>
+        )}
       </div>
       <Sheet open={timeSheet} onClose={() => setTimeSheet(false)} title="Unlock time">
         <UnlockTimePicker time={time} onTime={setTime} noFree={noFree} onNoFree={setNoFree} />

@@ -21,6 +21,8 @@ export interface LedgerEntry {
   /** Positive when earned, negative when spent. Minutes for screen time. */
   amount: number;
   unit: RewardKind;
+  /** Exact seconds behind a screen-time line recorded by the phone. */
+  seconds?: number;
 }
 
 export interface ActiveSession {
@@ -56,6 +58,8 @@ export interface Account {
   /** Day the "apps unlocked" notice was last sent. */
   unlockNoticeDay: string | null;
   lowScrollNoticeDay: string | null;
+  /** Last phone usage event applied to this account (see android LockStore). */
+  nativeSeq?: number;
 }
 
 export interface Task {
@@ -118,4 +122,6 @@ export interface AppData {
   notifications: AppNotification[];
   linkCodes: LinkCode[];
   timeRequests: TimeRequest[];
+  /** The account whose rules this phone enforces. Set when its permissions are granted. */
+  deviceOwnerId?: string | null;
 }
