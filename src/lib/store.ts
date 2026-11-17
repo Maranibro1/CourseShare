@@ -207,25 +207,54 @@ export interface ActOutcome {
 /**
  * Applies a change as the signed-in person. On failure the reason is shown
  * and `ok` is false, so screens stay put instead of moving on.
+ *
+ * With the server, changes are sent one at a time, in order, and each is
+ * also applied on the phone straight away (the rules are the same code), so
+ * a second tap already sees the first. The server's answer then replaces the
+ * guess; if the server refuses, the guess is rolled back.
  */
-export async function act(name: ActionName, args: Record<string, unknown> = {}): Promise<ActOutcome> {
+let sending: Promise<unknown> = Promise.resolve();
+
+export function act(name: ActionName, args: Record<string, unknown> = {}): Promise<ActOutcome> {
+  if (!SERVER_MODE) return Promise.resolve(actLocally(name, args));
+  const next = sending.then(() => actOnServer(name, args));
+  sending = next.catch(() => undefined);
+  return next;
+}
+
+function actLocally(name: ActionName, args: Record<string, unknown>): ActOutcome {
   const { data, setData, showToast } = useStore.getState();
   const actor = data.sessionId;
   if (!actor) {
     showToast('Please sign in again.');
     return { ok: false };
   }
-  if (!SERVER_MODE) {
+  try {
+    const out = applyAction(data, actor, name, args, Date.now());
+    setData(out.data);
+    return { ok: true, result: out.result };
+  } catch (e) {
+    if (e instanceof KaziError) {
+      showToast(e.message);
+      return { ok: false };
+    }
+    throw e;
+  }
+}
+
+async function actOnServer(name: ActionName, args: Record<string, unknown>): Promise<ActOutcome> {
+  const { data: before, setData, showToast } = useStore.getState();
+  const actor = before.sessionId;
+  if (!actor) {
+    showToast('Please sign in again.');
+    return { ok: false };
+  }
+  // Family codes are random, so a guess would show a different code from the server's.
+  if (name !== 'createLinkCode') {
     try {
-      const out = applyAction(data, actor, name, args, Date.now());
-      setData(out.data);
-      return { ok: true, result: out.result };
-    } catch (e) {
-      if (e instanceof KaziError) {
-        showToast(e.message);
-        return { ok: false };
-      }
-      throw e;
+      setData(applyAction(before, actor, name, args, Date.now()).data);
+    } catch {
+      // This phone may not hold everything the change needs (a family code, say); the server decides.
     }
   }
   try {
@@ -235,6 +264,11 @@ export async function act(name: ActionName, args: Record<string, unknown> = {}):
     return { ok: true, result: out.result };
   } catch (e) {
     showToast(e instanceof Error ? e.message : OFFLINE);
+    if (useStore.getState().data.sessionId === actor) {
+      setData(before);
+      etag = null;
+      void refresh();
+    }
     return { ok: false };
   }
 }

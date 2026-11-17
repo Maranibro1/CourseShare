@@ -68,8 +68,9 @@ export function Permissions() {
   const [params] = useSearchParams();
   const forChild = params.get('for') === 'child';
   const phone = useLockStatus();
-  // In the Android app these are the phone's real settings; on the web they are a walkthrough.
-  const { usage, accessibility } = isNativeAndroid ? phone ?? { usage: false, accessibility: false } : me.permissions;
+  // In the Android app these are the phone's real settings; on the web they are a walkthrough, saved on Continue.
+  const [walkthrough, setWalkthrough] = useState(me.permissions);
+  const { usage, accessibility } = isNativeAndroid ? phone ?? { usage: false, accessibility: false } : walkthrough;
 
   function allow(key: 'usage' | 'accessibility') {
     if (isNativeAndroid) {
@@ -77,7 +78,7 @@ export function Permissions() {
       open.catch(() => toast('Open Settings and allow Kazikwanza there.'));
       return;
     }
-    void act('updateProfile', { patch: { permissions: { ...me.permissions, [key]: true } } });
+    setWalkthrough((w) => ({ ...w, [key]: true }));
   }
 
   async function next() {

@@ -10,6 +10,7 @@ import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -40,6 +41,9 @@ public class KaziAccessibilityService extends AccessibilityService {
     private static final long TICK_MS = 1_000;
     /** Don't re-open the lock screen in a tight loop. */
     private static final long LOCK_COOLDOWN_MS = 1_500;
+    /** Time for the home screen to come up before the lock screen opens over it. */
+    private static final long HOME_SETTLE_MS = 400;
+    private static final String TAG = "KaziLock";
 
     /** True while Android has the service running. */
     static volatile boolean running;
@@ -210,11 +214,16 @@ public class KaziAccessibilityService extends AccessibilityService {
         long now = System.currentTimeMillis();
         if (now - lastLockAt < LOCK_COOLDOWN_MS) return;
         lastLockAt = now;
+        Log.i(TAG, "Locking " + app.id);
+        // Leave the locked app first. Going home finishes on its own schedule, so the lock
+        // screen opens a moment later; opening both at once can leave the home screen on top.
         performGlobalAction(GLOBAL_ACTION_HOME);
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        intent.putExtra(MainActivity.EXTRA_LOCKED_APP, app.id);
-        startActivity(intent);
+        handler.postDelayed(() -> {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            intent.putExtra(MainActivity.EXTRA_LOCKED_APP, app.id);
+            startActivity(intent);
+        }, HOME_SETTLE_MS);
     }
 
     /* ───────── Helpers ───────── */

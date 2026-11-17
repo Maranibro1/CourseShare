@@ -158,4 +158,14 @@ test('stays signed in after reopening the app', async ({ browser }) => {
   await onboardPersonal(p, null);
   await p.reload();
   await expect(p.getByRole('heading', { name: 'Today' })).toBeVisible();
+
+  // Two quick changes in a row both reach the server (the second builds on the first).
+  await p.goto('/#/settings');
+  await p.getByRole('button', { name: 'Lock X' }).click();
+  await p.getByRole('button', { name: 'Lock Snapchat' }).click();
+  await expect(p.getByRole('button', { name: 'Lock Snapchat' })).toHaveAttribute('aria-pressed', 'true');
+  await p.waitForTimeout(1500);
+  await p.reload();
+  await expect(p.getByRole('button', { name: 'Lock X' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(p.getByRole('button', { name: 'Lock Snapchat' })).toHaveAttribute('aria-pressed', 'true');
 });
