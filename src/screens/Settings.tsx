@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronIcon } from '../components/Icons';
+import { InstallCard } from '../components/Install';
 import { Avatar, BackButton, NavScreen, Sheet, Toggle } from '../components/ui';
 import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
-import { findAccountByContact, freeUnlockActive, requestsFor, setDeviceOwner, signOut, updateAccount } from '../lib/logic';
-import { KaziLock, isNativeAndroid, useLockStatus } from '../lib/native';
-import { run, toast, useAccount, useData } from '../lib/store';
+import { setDeviceOwner, useDeviceOwner } from '../lib/device';
+import { findAccountByContact, freeUnlockActive, requestsFor } from '../lib/logic';
+import { KaziLock, isNativeAndroid, pumpNative, useLockStatus } from '../lib/native';
+import { act, signOut, toast, useAccount, useData } from '../lib/store';
 import { clockToday, formatClock } from '../lib/time';
 import type { LockableApp } from '../lib/apps';
 import { UnlockTimePicker } from './Onboarding';
@@ -20,14 +22,16 @@ export function Settings() {
   const verifierName = me.verifier ? findAccountByContact(data, me.verifier.contact)?.name ?? me.verifier.contact : 'None';
 
   const phone = useLockStatus();
-  const ownerIsMe = data.deviceOwnerId === me.id;
-  const ownerName = data.deviceOwnerId ? data.accounts[data.deviceOwnerId]?.name : undefined;
+  const owner = useDeviceOwner();
+  const ownerIsMe = owner === me.id;
+  const ownerName = owner ? data.accounts[owner]?.name : undefined;
   let phoneLockLabel = 'Checking…';
   if (phone) phoneLockLabel = !phone.accessibility ? 'Off' : ownerIsMe ? 'On' : `On for ${ownerName ?? 'someone else'}`;
 
   function phoneLock() {
     if (!ownerIsMe) {
-      run((d) => setDeviceOwner(d, me.id));
+      setDeviceOwner(me.id);
+      void pumpNative();
       toast('This phone now follows your rules');
     }
     if (!phone?.accessibility) KaziLock.openAccessibilitySettings().catch(() => toast('Open Settings > Accessibility to turn it on.'));
@@ -35,13 +39,13 @@ export function Settings() {
 
   const lockedHours = () => me.unlockTime !== null && !freeUnlockActive(me, Date.now());
 
-  function saveTime() {
+  async function saveTime() {
     // Moving the unlock time to a moment that has already passed would open everything now.
     if (!noFree && !freeUnlockActive(me, Date.now()) && clockToday(time) <= Date.now()) {
       toast('Pick a time later than now. You can choose an earlier time while your apps are unlocked.');
       return;
     }
-    run((d) => updateAccount(d, me.id, { unlockTime: noFree ? null : time }));
+    if (!(await act('updateProfile', { patch: { unlockTime: noFree ? null : time } })).ok) return;
     setTimeSheet(false);
     toast(noFree ? 'Free unlock turned off' : `Apps will unlock at ${formatClock(time)}`);
   }
@@ -53,7 +57,7 @@ export function Settings() {
       return;
     }
     const next = on ? [...me.lockedApps, app.id] : me.lockedApps.filter((x) => x !== app.id);
-    run((d) => updateAccount(d, me.id, { lockedApps: next }));
+    void act('updateProfile', { patch: { lockedApps: next } });
   }
 
   const group = (title: string, apps: LockableApp[]) => (
@@ -170,7 +174,7 @@ export function Profile() {
           <Toggle
             on={me.notificationsOn}
             label="Notifications"
-            onChange={(on) => run((d) => updateAccount(d, me.id, { notificationsOn: on }))}
+            onChange={(on) => void act('updateProfile', { patch: { notificationsOn: on } })}
           />
         </div>
         <div className="row">
@@ -182,11 +186,12 @@ export function Profile() {
           <ChevronIcon size={18} color="#52525B" />
         </button>
       </div>
+      <InstallCard tone="white" />
       <div className="spacer" />
       <button
         className="btn btn-danger"
-        onClick={() => {
-          run((d, now) => signOut(d, now));
+        onClick={async () => {
+          await signOut();
           navigate('/welcome', { replace: true });
         }}
       >
@@ -195,7 +200,7 @@ export function Profile() {
       <Sheet open={help} onClose={() => setHelp(false)} title="How Kazikwanza works">
         <div className="stack-12 lead" style={{ fontSize: 15 }}>
           <p>
-            <strong>Earn first.</strong> Locked apps open when you have scrolls (TikTok, Instagram, YouTube, X) or screen time (games and
+            <strong>Earn first.</strong> Locked apps open when you have scrolls (TikTok, Instagram, Facebook, YouTube and Shorts, X) or screen time (games and
             other apps). Each swipe to a new post uses 1 scroll.
           </p>
           <p>

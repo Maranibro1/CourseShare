@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { notificationsFor, requestsFor, unreadMessages } from '../lib/logic';
 import { loadPhoto } from '../lib/photos';
-import { useStore } from '../lib/store';
-import { BackIcon, CameraIcon, FamilyIcon, ListIcon, SettingsIcon, WalletIcon } from './Icons';
+import { useData, useStore } from '../lib/store';
+import type { Account } from '../lib/types';
+import { BackIcon, BellIcon, CameraIcon, ChatIcon, FamilyIcon, ListIcon, SettingsIcon, VerifyIcon, WalletIcon } from './Icons';
 
 /** Goes back in history when there is somewhere to go, otherwise to `fallback`. */
 export function useBack(fallback: string) {
@@ -133,18 +135,31 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
   );
 }
 
-/** Shows a stored proof photo, or the camera placeholder when there is none. */
-export function StoredPhoto({ taskId, height, label }: { taskId: string; height: number; label: string }) {
+/** Loads a proof photo: undefined while loading, null when there is none. */
+function usePhoto(taskId: string): string | null | undefined {
   const [src, setSrc] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
+    let url: string | undefined;
     loadPhoto(taskId)
-      .then((p) => alive && setSrc(p ?? null))
+      .then((p) => {
+        url = p;
+        if (alive) setSrc(p ?? null);
+        else if (p?.startsWith('blob:')) URL.revokeObjectURL(p);
+      })
       .catch(() => alive && setSrc(null));
     return () => {
       alive = false;
+      // Photos downloaded from the server are held in memory until the screen closes.
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
     };
   }, [taskId]);
+  return src;
+}
+
+/** Shows a stored proof photo, or the camera placeholder when there is none. */
+export function StoredPhoto({ taskId, height, label }: { taskId: string; height: number; label: string }) {
+  const src = usePhoto(taskId);
   return (
     <div className="photo-frame" style={{ height, flexDirection: 'column', gap: 10 }}>
       {src ? (
@@ -162,16 +177,7 @@ export function StoredPhoto({ taskId, height, label }: { taskId: string; height:
 }
 
 export function Thumb({ taskId }: { taskId: string }) {
-  const [src, setSrc] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    loadPhoto(taskId)
-      .then((p) => alive && setSrc(p ?? null))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [taskId]);
+  const src = usePhoto(taskId);
   return <div className="thumb">{src && <img src={src} alt="" />}</div>;
 }
 
@@ -188,6 +194,42 @@ export function Avatar({ name, solid, size = 44, to }: { name: string; solid?: b
   return (
     <div className={solid ? 'avatar solid' : 'avatar'} style={style} aria-hidden="true">
       {initial}
+    </div>
+  );
+}
+
+function CountBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return <span className="count-badge">{count > 9 ? '9+' : count}</span>;
+}
+
+/**
+ * The round buttons at the top of the home screens: people I check, messages,
+ * notifications and profile, each showing how many things are waiting.
+ */
+export function HeaderActions({ me, showVerify = true }: { me: Account; showVerify?: boolean }) {
+  const data = useData();
+  const toCheck = requestsFor(data, me.id).filter((t) => !t.verifierId).length;
+  const unread = unreadMessages(data, me.id);
+  const unseen = notificationsFor(data, me.id).some((n) => !n.read);
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  return (
+    <div className="header-actions">
+      {showVerify && (
+        <Link to="/requests" className="icon-circle sm" aria-label={toCheck ? `People I verify for, ${plural(toCheck, 'photo')} to check` : 'People I verify for'}>
+          <VerifyIcon size={20} />
+          <CountBadge count={toCheck} />
+        </Link>
+      )}
+      <Link to="/messages" className="icon-circle sm" aria-label={unread ? `Messages, ${plural(unread, 'unread message')}` : 'Messages'}>
+        <ChatIcon size={20} />
+        <CountBadge count={unread} />
+      </Link>
+      <Link to="/notifications" className="icon-circle sm" aria-label={unseen ? 'Notifications, unread' : 'Notifications'}>
+        <BellIcon size={20} />
+        {unseen && <span className="badge-dot" />}
+      </Link>
+      <Avatar name={me.name} to="/profile" size={40} />
     </div>
   );
 }

@@ -1,46 +1,157 @@
-name: Android APK
+name: Kazikwanza
 
 on:
   push:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  web:
+    name: Web app, server and browser tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
 
+  apk:
+    name: Android app (APK)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+      - run: npm ci
 
-      - name: Install
-        run: npm ci
-
-      - name: Web tests
-        run: npm test
-
-      - name: Build web app and copy it into Android
+      # With the repository variable KAZI_SERVER_URL set (Settings > Secrets and
+      # variables > Actions > Variables), the app talks to that sync server, so
+      # verifiers, parents and messages work across phones. Without it, the app
+      # keeps everything on the phone.
+      - name: Build the web app into Android
+        env:
+          VITE_SYNC: ${{ vars.KAZI_SERVER_URL != '' && 'server' || '' }}
+          VITE_API_URL: ${{ vars.KAZI_SERVER_URL }}
+          VITE_PUBLIC_URL: ${{ vars.KAZI_SERVER_URL }}
         run: |
           npm run build
           npx cap sync android
 
-      - name: Android unit tests
-        working-directory: android
-        run: ./gradlew testDebugUnitTest
+      # Optional: a fixed signing key (secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+      # ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD) lets new versions install over old ones.
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/kazikwanza.jks"
+            echo "KAZI_KEYSTORE=$RUNNER_TEMP/kazikwanza.jks" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build debug APK
+      # Without a release key, keep the same debug key from run to run so updates install over each other.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Android unit tests and APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        env:
+          KAZI_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KAZI_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KAZI_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KAZI_KEYSTORE" ]; then
+            ./gradlew testDebugUnitTest assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk ../kazikwanza.apk
+          else
+            ./gradlew testDebugUnitTest assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk ../kazikwanza.apk
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kazikwanza-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: kazikwanza-apk
+          path: kazikwanza.apk
+
+      # A fixed public link for the welcome screen's "Download for Android" button:
+      # https://github.com/<owner>/<repo>/releases/download/android-latest/kazikwanza.apk
+      - name: Publish as the latest download
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Built from ${GITHUB_SHA::7}. Install it on Android, then switch on the Kazikwanza app lock when the app asks."
+          if gh release view android-latest > /dev/null 2>&1; then
+            gh release upload android-latest kazikwanza.apk --clobber
+            gh release edit android-latest --notes "$notes"
+          else
+            gh release create android-latest kazikwanza.apk --title "Kazikwanza for Android" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+
+  device:
+    name: App lock on an Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - name: Build the web app into Android
+        run: |
+          npm run build
+          npx cap sync android
+      - name: Build the app, the test and the stand-in apps
+        working-directory: android
+        run: ./gradlew assembleDebug assembleDebugAndroidTest :standins:assembleDebug
+      - name: Enable hardware acceleration for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Swipe through TikTok, Shorts, Instagram, Facebook and X stand-ins and time a game
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          working-directory: android
+          script: |
+            for f in standins/build/outputs/apk/*/debug/*.apk; do adb install -r "$f"; done
+            ./gradlew connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-test-report
+          path: android/app/build/reports/androidTests/
+          if-no-files-found: ignore

@@ -3,10 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckIcon, ShieldIcon } from '../components/Icons';
 import { BackButton, StepHeader } from '../components/ui';
 import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
-import { isValidContact, normalizeContact, setDeviceOwner, updateAccount } from '../lib/logic';
+import { setDeviceOwner } from '../lib/device';
+import { appLink } from '../lib/install';
+import { isValidContact, normalizeContact } from '../lib/logic';
 import { KaziLock, isNativeAndroid, useLockStatus } from '../lib/native';
 import { formatClock, formatClockShort } from '../lib/time';
-import { run, toast, useAccount } from '../lib/store';
+import { act, toast, useAccount } from '../lib/store';
 import type { Mode } from '../lib/types';
 
 const MODES: { id: Mode; title: string; body: string }[] = [
@@ -20,21 +22,19 @@ export function ChooseMode() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>(me.mode);
 
-  function next() {
+  async function next() {
     if (mode === 'child') {
       // The child becomes "child" mode once a parent's code links them.
-      run((d) => updateAccount(d, me.id, { mode: 'personal' }));
-      navigate('/join');
+      if ((await act('updateProfile', { patch: { mode: 'personal' } })).ok) navigate('/join');
       return;
     }
     if (mode === 'parent') {
       // Parents manage their child's phone; nothing is locked on their own until they choose to.
-      run((d) => updateAccount(d, me.id, { mode: 'parent', onboarded: true, lockedApps: [], verifier: null }));
-      navigate('/family/link', { replace: true });
+      const patch = { mode: 'parent', onboarded: true, lockedApps: [], verifier: null };
+      if ((await act('updateProfile', { patch })).ok) navigate('/family/link', { replace: true });
       return;
     }
-    run((d) => updateAccount(d, me.id, { mode: 'personal' }));
-    navigate('/onboarding/permissions');
+    if ((await act('updateProfile', { patch: { mode: 'personal' } })).ok) navigate('/onboarding/permissions');
   }
 
   return (
@@ -77,18 +77,15 @@ export function Permissions() {
       open.catch(() => toast('Open Settings and allow Kazikwanza there.'));
       return;
     }
-    run((d) => updateAccount(d, me.id, { permissions: { ...me.permissions, [key]: true } }));
+    void act('updateProfile', { patch: { permissions: { ...me.permissions, [key]: true } } });
   }
 
-  function next() {
+  async function next() {
+    const patch = forChild ? { permissions: { usage, accessibility }, onboarded: true } : { permissions: { usage, accessibility } };
+    if (!(await act('updateProfile', { patch })).ok) return;
     // This phone now enforces this account's rules.
-    run((d) => setDeviceOwner(updateAccount(d, me.id, { permissions: { usage, accessibility } }), me.id));
-    if (forChild) {
-      run((d) => updateAccount(d, me.id, { onboarded: true }));
-      navigate('/child', { replace: true });
-    } else {
-      navigate('/onboarding/apps');
-    }
+    setDeviceOwner(me.id);
+    navigate(forChild ? '/child' : '/onboarding/apps', { replace: forChild });
   }
 
   const item = (key: 'usage' | 'accessibility', title: string, body: string, on: boolean) => (
@@ -184,9 +181,8 @@ export function PickApps() {
       <button
         className="btn btn-primary"
         disabled={n === 0}
-        onClick={() => {
-          run((d) => updateAccount(d, me.id, { lockedApps: locked }));
-          navigate('/onboarding/unlock');
+        onClick={async () => {
+          if ((await act('updateProfile', { patch: { lockedApps: locked } })).ok) navigate('/onboarding/unlock');
         }}
       >
         {n === 0 ? 'Pick at least 1 app' : `Lock ${n} app${n === 1 ? '' : 's'}`}
@@ -293,9 +289,8 @@ export function UnlockTime() {
       <div className="spacer" />
       <button
         className="btn btn-primary"
-        onClick={() => {
-          run((d) => updateAccount(d, me.id, { unlockTime: noFree ? null : time }));
-          navigate('/onboarding/verifier');
+        onClick={async () => {
+          if ((await act('updateProfile', { patch: { unlockTime: noFree ? null : time } })).ok) navigate('/onboarding/verifier');
         }}
       >
         Continue
@@ -324,8 +319,10 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
       setError('Pick someone else. You can’t check your own work.');
       return;
     }
-    run((d) => updateAccount(d, me.id, { verifier: { contact: contact.trim(), relation }, onboarded: true }));
-    const text = `${me.name} added you as their Kazikwanza verifier. Open Kazikwanza and sign up with ${contact.trim()} to approve their tasks.`;
+    const { ok } = await act('updateProfile', { patch: { verifier: { contact: contact.trim(), relation }, onboarded: true } });
+    if (!ok) return;
+    const where = appLink();
+    const text = `${me.name} added you as their Kazikwanza verifier. Get Kazikwanza${where ? ` at ${where}` : ''} and sign up with ${contact.trim()} to check their tasks and message them.`;
     if (navigator.share) {
       try {
         await navigator.share({ title: 'Kazikwanza', text });
@@ -382,8 +379,8 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
           me.verifier && (
             <button
               className="link-btn danger"
-              onClick={() => {
-                run((d) => updateAccount(d, me.id, { verifier: null }));
+              onClick={async () => {
+                if (!(await act('updateProfile', { patch: { verifier: null } })).ok) return;
                 toast('Verifier removed. New tasks will use questions.');
                 done();
               }}
@@ -394,9 +391,8 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
         ) : (
           <button
             className="link-btn"
-            onClick={() => {
-              run((d) => updateAccount(d, me.id, { onboarded: true }));
-              done();
+            onClick={async () => {
+              if ((await act('updateProfile', { patch: { onboarded: true } })).ok) done();
             }}
           >
             Skip, I'll use questions for now

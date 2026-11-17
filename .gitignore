@@ -5,3 +5,7 @@ playwright-report
 *.log
 *.tsbuildinfo
 *.zip
+dist-server
+/data
+.e2e-data
+.e2e-web

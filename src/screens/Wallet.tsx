@@ -2,8 +2,8 @@ import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BackButton, NavScreen } from '../components/ui';
 import { TIME_APPS, getApp } from '../lib/apps';
-import { markNotificationsRead, minutesUsedToday, minutesLeft, notificationsFor, remainingSeconds, rewardLabel, weekStats } from '../lib/logic';
-import { run, useAccount, useData, useNow } from '../lib/store';
+import { minutesUsedToday, minutesLeft, notificationsFor, remainingSeconds, rewardLabel, weekStats } from '../lib/logic';
+import { act, useAccount, useData, useNow } from '../lib/store';
 import { formatMinSec, timeAgo } from '../lib/time';
 import { homePath } from './Tasks';
 
@@ -151,7 +151,7 @@ export function Notifications() {
   const items = notificationsFor(data, me.id);
 
   // Leave the unread dots visible while the list is open; clear them on the way out.
-  useEffect(() => () => void run((d) => markNotificationsRead(d, me.id)), [me.id]);
+  useEffect(() => () => void act('markNotificationsRead'), [me.id]);
 
   return (
     <main className="screen gap-20">

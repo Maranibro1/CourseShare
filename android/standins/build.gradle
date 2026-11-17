@@ -1,0 +1,72 @@
+apply plugin: 'com.android.application'
+
+/*
+ * Test-only stand-ins for the apps Kazikwanza locks. Each flavor has the real
+ * app's package name and the kind of list that app uses, so the lock service
+ * sees exactly what it would see in TikTok, Instagram and the rest.
+ * Never published; built for the emulator tests in .github/workflows/android.yml.
+ */
+android {
+    namespace "app.kazikwanza.standin"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    flavorDimensions "app"
+    productFlavors {
+        // Full-screen vertical pager, one video per page.
+        tiktok {
+            dimension "app"
+            applicationId "com.zhiliaoapp.musically"
+            buildConfigField "String", "LAYOUT", '"pager"'
+            resValue "string", "app_name", "TikTok (test)"
+        }
+        youtube {
+            dimension "app"
+            applicationId "com.google.android.youtube"
+            buildConfigField "String", "LAYOUT", '"pager"'
+            resValue "string", "app_name", "YouTube Shorts (test)"
+        }
+        // Scrolling feed with a sideways story tray at the top.
+        instagram {
+            dimension "app"
+            applicationId "com.instagram.android"
+            buildConfigField "String", "LAYOUT", '"feed"'
+            resValue "string", "app_name", "Instagram (test)"
+        }
+        facebook {
+            dimension "app"
+            applicationId "com.facebook.katana"
+            buildConfigField "String", "LAYOUT", '"feed"'
+            resValue "string", "app_name", "Facebook (test)"
+        }
+        x {
+            dimension "app"
+            applicationId "com.twitter.android"
+            buildConfigField "String", "LAYOUT", '"feed"'
+            resValue "string", "app_name", "X (test)"
+        }
+        // A game: no scrolling, timed against screen time.
+        minecraft {
+            dimension "app"
+            applicationId "com.mojang.minecraftpe"
+            buildConfigField "String", "LAYOUT", '"game"'
+            resValue "string", "app_name", "Minecraft (test)"
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.recyclerview:recyclerview:1.3.2"
+    implementation "androidx.viewpager2:viewpager2:1.0.0"
+}

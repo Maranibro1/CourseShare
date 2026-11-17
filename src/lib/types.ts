@@ -58,8 +58,10 @@ export interface Account {
   /** Day the "apps unlocked" notice was last sent. */
   unlockNoticeDay: string | null;
   lowScrollNoticeDay: string | null;
-  /** Last phone usage event applied to this account (see android LockStore). */
-  nativeSeq?: number;
+  /** Last phone usage event applied from each of this account's phones (see android LockStore). */
+  nativeSeqs?: Record<string, number>;
+  /** IANA zone the account's days and unlock time are counted in. */
+  timeZone?: string;
 }
 
 export interface Task {
@@ -114,6 +116,15 @@ export interface TimeRequest {
   status: 'open' | 'granted' | 'declined';
 }
 
+export interface Message {
+  id: string;
+  from: string;
+  to: string;
+  text: string;
+  at: number;
+  read: boolean;
+}
+
 export interface AppData {
   version: 1;
   accounts: Record<string, Account>;
@@ -122,6 +133,5 @@ export interface AppData {
   notifications: AppNotification[];
   linkCodes: LinkCode[];
   timeRequests: TimeRequest[];
-  /** The account whose rules this phone enforces. Set when its permissions are granted. */
-  deviceOwnerId?: string | null;
+  messages: Message[];
 }

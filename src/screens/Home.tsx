@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { BellIcon, CheckIcon, ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
-import { Avatar, NavScreen } from '../components/ui';
+import { CheckIcon, ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
+import { HeaderActions, NavScreen } from '../components/ui';
 import { lockedNames } from '../lib/apps';
-import { approverName, freeUnlockActive, minutesLeft, notificationsFor, rewardLabel, todaysTasks } from '../lib/logic';
+import { approverName, freeUnlockActive, minutesLeft, rewardLabel, todaysTasks } from '../lib/logic';
 import { useAccount, useData, useNow } from '../lib/store';
 import { formatClock, greeting } from '../lib/time';
 import type { Account, AppData, Task } from '../lib/types';
@@ -74,7 +74,6 @@ export function Home() {
 
   const tasks = todaysTasks(data, me.id, now);
   const doneCount = tasks.filter((t) => t.status === 'done').length;
-  const unread = notificationsFor(data, me.id).some((n) => !n.read);
   const scrollApps = lockedNames(me.lockedApps, 'scrolls');
   const timeApps = lockedNames(me.lockedApps, 'minutes');
   const minutes = minutesLeft(me, now);
@@ -94,13 +93,7 @@ export function Home() {
           </span>
           <h1 className="h1-lg">Today</h1>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Link to="/notifications" className="icon-circle" aria-label={unread ? 'Notifications, unread' : 'Notifications'}>
-            <BellIcon size={20} />
-            {unread && <span className="badge-dot" />}
-          </Link>
-          <Avatar name={me.name} to="/profile" />
-        </div>
+        <HeaderActions me={me} />
       </div>
 
       <div className="stack-10">

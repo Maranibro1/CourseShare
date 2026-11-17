@@ -2,12 +2,13 @@ import { HashRouter, Navigate, Route, Routes, matchPath, useLocation } from 'rea
 import type { ReactNode } from 'react';
 import { Toast } from './components/ui';
 import { useNativeBridge } from './lib/native';
-import { useDailyTick, useMe } from './lib/store';
+import { useDailyTick, useLiveUpdates, useMe, useStore, useTimeZoneSync } from './lib/store';
 import type { Account } from './lib/types';
 import { AppView, Emergency, Launcher, Locked } from './screens/Apps';
 import { SignIn, SignUp, Welcome } from './screens/Auth';
 import { ApproveProof, ChildHome, ChildRules, ChildTaskForm, ChildWeek, JoinFamily, LinkChild, ParentHome } from './screens/Family';
 import { Home } from './screens/Home';
+import { Chat, Messages } from './screens/Messages';
 import { AddVerifier, ChooseMode, Permissions, PickApps, UnlockTime } from './screens/Onboarding';
 import { Requests } from './screens/Requests';
 import { Profile, Settings } from './screens/Settings';
@@ -28,6 +29,8 @@ const CHILD_ALLOWED = [
   '/screen-time',
   '/notifications',
   '/profile',
+  '/messages',
+  '/messages/:id',
 ];
 
 const matches = (patterns: string[], path: string) => patterns.some((p) => matchPath(p, path));
@@ -42,9 +45,22 @@ function homeFor(me: Account): string {
 function Gate({ children }: { children: ReactNode }) {
   const me = useMe();
   const { pathname } = useLocation();
+  const syncing = useStore((s) => s.syncing);
   useDailyTick();
+  useLiveUpdates();
+  useTimeZoneSync();
   useNativeBridge();
 
+  if (!me && syncing) {
+    // Signed in with the server but nothing downloaded yet: wait a moment instead of showing the welcome screen.
+    return (
+      <main className="screen centered" aria-busy="true">
+        <p className="lead" style={{ textAlign: 'center' }}>
+          Loading your tasks…
+        </p>
+      </main>
+    );
+  }
   if (!me) {
     return matches(SIGNED_OUT, pathname) ? <>{children}</> : <Navigate to="/welcome" replace />;
   }
@@ -93,6 +109,8 @@ export default function App() {
               <Route path="/settings/verifier" element={<AddVerifier editing />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/requests" element={<Requests />} />
+              <Route path="/messages" element={<Messages />} />
+              <Route path="/messages/:id" element={<Chat />} />
 
               <Route path="/apps" element={<Launcher />} />
               <Route path="/app/:appId" element={<AppView />} />

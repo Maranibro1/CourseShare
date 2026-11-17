@@ -1,4 +1,6 @@
 include ':app'
+// Stand-in apps with the same package names as TikTok, Instagram etc., used only by the on-device lock tests.
+include ':standins'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

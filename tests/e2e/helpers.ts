@@ -40,8 +40,8 @@ export async function onboardPersonal(page: Page, verifier: string | null) {
   await page.getByRole('button', { name: 'Allow Usage access' }).click();
   await page.getByRole('button', { name: 'Allow Accessibility' }).click();
   await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('button', { name: 'Lock 5 apps' })).toBeVisible();
-  await page.getByRole('button', { name: 'Lock 5 apps' }).click();
+  await expect(page.getByRole('button', { name: 'Lock 6 apps' })).toBeVisible();
+  await page.getByRole('button', { name: 'Lock 6 apps' }).click();
   await page.getByText('No free unlock, only earn scrolls').click();
   await page.getByRole('button', { name: 'Continue' }).click();
   if (verifier) {

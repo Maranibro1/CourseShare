@@ -1,23 +1,55 @@
 import { createStore, del, get, set } from 'idb-keyval';
+import { API_BASE, SERVER_MODE, api } from './store';
 
-/**
- * Proof photos are kept in IndexedDB, not in the main state, so localStorage
- * never fills up. They are deleted once a task is approved.
+/*
+ * Proof photos. On their own, they're kept in IndexedDB (not in the main
+ * state, so localStorage never fills up). With the sync server they are
+ * uploaded, so the verifier can see them on their own phone; the server
+ * deletes them once the task has been reviewed.
  */
-const store = typeof indexedDB !== 'undefined' ? createStore('kazikwanza', 'photos') : undefined;
+const store = !SERVER_MODE && typeof indexedDB !== 'undefined' ? createStore('kazikwanza', 'photos') : undefined;
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [head, b64] = dataUrl.split(',');
+  const type = /data:([^;]+)/.exec(head)?.[1] ?? 'image/jpeg';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
 
 export async function savePhoto(taskId: string, dataUrl: string): Promise<void> {
+  if (SERVER_MODE) {
+    await api(`/api/photos/${encodeURIComponent(taskId)}`, { method: 'PUT', body: dataUrlToBlob(dataUrl), headers: { 'Content-Type': 'image/jpeg' } });
+    return;
+  }
   if (!store) return;
   await set(taskId, dataUrl, store);
 }
 
+/** A URL an <img> can show, or undefined when there is no photo. */
 export async function loadPhoto(taskId: string): Promise<string | undefined> {
+  if (SERVER_MODE) {
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem('kazikwanza:token');
+    } catch {
+      /* no storage */
+    }
+    const res = await fetch(`${API_BASE}/api/photos/${encodeURIComponent(taskId)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    });
+    if (!res.ok) return undefined;
+    return URL.createObjectURL(await res.blob());
+  }
   if (!store) return undefined;
   return get<string>(taskId, store);
 }
 
 export async function deletePhoto(taskId: string): Promise<void> {
-  if (!store) return;
+  // The server removes photos itself once a task is reviewed or deleted.
+  if (SERVER_MODE || !store) return;
   await del(taskId, store);
 }
 
@@ -43,6 +75,9 @@ export function compressImage(file: File, maxSide = 1024, quality = 0.72): Promi
         reject(new Error('Could not read that photo'));
         return;
       }
+      // JPEG has no transparency; paint white behind see-through images.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
       resolve(canvas.toDataURL('image/jpeg', quality));
     };

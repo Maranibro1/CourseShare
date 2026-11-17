@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-server
+data
+.e2e-data
+.e2e-web
+android
+test-results
+playwright-report
+*.zip
+.git

@@ -1,29 +1,22 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { BellIcon, ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
-import { Avatar, BackButton, NavScreen, Sheet, StoredPhoto, useBack } from '../components/ui';
+import { ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
+import { Avatar, BackButton, HeaderActions, NavScreen, Sheet, StoredPhoto, useBack } from '../components/ui';
 import { getApp, lockedNames } from '../lib/apps';
 import {
   LINK_CODE_TTL_MS,
   TIME_GIFT,
   activeLinkCode,
-  addChildTask,
-  answerTimeRequest,
   childrenOf,
-  createLinkCode,
   dailyCompletions,
-  joinFamily,
-  notificationsFor,
   minutesLeft,
   requestsFor,
   rewardLabel,
-  setChildRules,
   todaysTasks,
-  unlinkChild,
   weekStats,
 } from '../lib/logic';
-import { run, toast, useAccount, useData, useNow } from '../lib/store';
+import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { formatClock } from '../lib/time';
 import type { Account, Repeat, RewardKind } from '../lib/types';
 import { unlockLine, useUnseenReward, TaskRow } from './Home';
@@ -40,7 +33,6 @@ export function ParentHome() {
   const kids = childrenOf(data, me.id);
   const pending = requestsFor(data, me.id).filter((t) => t.verifierId === me.id);
   const asks = data.timeRequests.filter((r) => r.parentId === me.id && r.status === 'open');
-  const unread = notificationsFor(data, me.id).some((n) => !n.read);
 
   return (
     <NavScreen
@@ -52,20 +44,24 @@ export function ParentHome() {
         )
       }
     >
-      <div className="topbar">
-        <h1 className="h1-lg">Family</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {me.mode === 'parent' ? (
+        <>
+          <div className="topbar">
+            <h1 className="h1-lg">Family</h1>
+            <HeaderActions me={me} />
+          </div>
+          <Link to="/family/link" className="link-btn strong" style={{ alignSelf: 'flex-start', marginTop: -16 }}>
+            + Link a child
+          </Link>
+        </>
+      ) : (
+        <div className="topbar">
+          <h1 className="h1-lg">Family</h1>
           <Link to="/family/link" className="link-btn strong">
             + Link a child
           </Link>
-          {me.mode === 'parent' && (
-            <Link to="/notifications" className="icon-circle" aria-label={unread ? 'Notifications, unread' : 'Notifications'}>
-              <BellIcon size={20} />
-              {unread && <span className="badge-dot" />}
-            </Link>
-          )}
         </div>
-      </div>
+      )}
 
       {kids.length === 0 && (
         <div className="stack-12">
@@ -108,14 +104,14 @@ export function ParentHome() {
               <strong>{kid?.name}</strong> asked for more time.
             </span>
             <div className="grid-2">
-              <button className="btn btn-secondary" style={{ height: 44, fontSize: 15 }} onClick={() => run((d, t) => answerTimeRequest(d, r.id, me.id, false, t))}>
+              <button className="btn btn-secondary" style={{ height: 44, fontSize: 15 }} onClick={() => void act('answerTimeRequest', { requestId: r.id, grant: false })}>
                 Not now
               </button>
               <button
                 className="btn btn-primary"
                 style={{ height: 44, fontSize: 15 }}
-                onClick={() => {
-                  if (run((d, t) => answerTimeRequest(d, r.id, me.id, true, t))) toast(`Sent to ${kid?.name}`);
+                onClick={async () => {
+                  if ((await act('answerTimeRequest', { requestId: r.id, grant: true })).ok) toast(`Sent to ${kid?.name}`);
                 }}
               >
                 Give {getApp(r.appId)?.kind === 'minutes' ? `${TIME_GIFT.minutes} min` : `${TIME_GIFT.scrolls} scrolls`}
@@ -203,7 +199,7 @@ export function LinkChild() {
   const kids = childrenOf(data, me.id);
 
   useEffect(() => {
-    if (!code) run((d, t) => createLinkCode(d, me.id, t));
+    if (!code) void act('createLinkCode');
   }, [code, me.id]);
 
   useEffect(() => {
@@ -304,10 +300,10 @@ export function ChildTaskForm() {
     );
   }
 
-  function save(e: FormEvent) {
+  async function save(e: FormEvent) {
     e.preventDefault();
     const repeat: Repeat = daily ? 'daily' : 'never';
-    if (run((d, now) => addChildTask(d, me.id, childId, { title, rewardKind: kind, amount, repeat, dueTime: due }, now).data)) {
+    if ((await act('addChildTask', { childId, input: { title, rewardKind: kind, amount, repeat, dueTime: due } })).ok) {
       toast(`Sent to ${child.name}`);
       navigate('/family', { replace: true });
     }
@@ -372,7 +368,6 @@ export function ChildTaskForm() {
 /* ───────── Approve a child's photo ───────── */
 
 export function ApproveProof() {
-  const me = useAccount();
   const data = useData();
   const task = useTask();
   const navigate = useNavigate();
@@ -403,8 +398,8 @@ export function ApproveProof() {
           </button>
           <button
             className="btn btn-primary"
-            onClick={() => {
-              if (approve(task, me.id)) navigate('/family', { replace: true });
+            onClick={async () => {
+              if (await approve(task)) navigate('/family', { replace: true });
             }}
           >
             Approve
@@ -499,7 +494,6 @@ function MissingChild() {
 }
 
 export function ChildRules() {
-  const me = useAccount();
   const kid = useChild();
   const navigate = useNavigate();
   const [locked, setLocked] = useState<string[]>(kid?.lockedApps ?? []);
@@ -521,8 +515,8 @@ export function ChildRules() {
       <div className="actions">
         <button
           className="btn btn-primary"
-          onClick={() => {
-            if (run((d, now) => setChildRules(d, me.id, kid.id, { lockedApps: locked, unlockTime: noFree ? null : time }, now))) {
+          onClick={async () => {
+            if ((await act('setChildRules', { childId: kid.id, rules: { lockedApps: locked, unlockTime: noFree ? null : time } })).ok) {
               toast(`${kid.name}'s rules saved`);
               navigate(`/family/child/${kid.id}`, { replace: true });
             }
@@ -539,8 +533,8 @@ export function ChildRules() {
         <button
           className="btn btn-primary"
           style={{ background: '#B91C1C' }}
-          onClick={() => {
-            if (run((d) => unlinkChild(d, me.id, kid.id))) navigate('/family', { replace: true });
+          onClick={async () => {
+            if ((await act('unlinkChild', { childId: kid.id })).ok) navigate('/family', { replace: true });
           }}
         >
           Unlink
@@ -620,16 +614,13 @@ function QrScanner({ onCode, onClose }: { onCode: (code: string) => void; onClos
 }
 
 export function JoinFamily() {
-  const me = useAccount();
   const navigate = useNavigate();
   const [code, setCode] = useState('');
   const [scan, setScan] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  function join(value = code) {
-    if (run((d, now) => joinFamily(d, me.id, value, now))) {
-      navigate('/onboarding/permissions?for=child', { replace: true });
-    }
+  async function join(value = code) {
+    if ((await act('joinFamily', { code: value })).ok) navigate('/onboarding/permissions?for=child', { replace: true });
   }
 
   return (
@@ -691,7 +682,6 @@ export function ChildHome() {
   useUnseenReward(me);
   const parent = me.parentId ? data.accounts[me.parentId] : null;
   const tasks = todaysTasks(data, me.id, now);
-  const unread = notificationsFor(data, me.id).some((n) => !n.read);
 
   return (
     <main className="screen top">
@@ -702,13 +692,7 @@ export function ChildHome() {
           </span>
           <h1 className="h1-lg">My tasks</h1>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Link to="/notifications" className="icon-circle" aria-label={unread ? 'Notifications, unread' : 'Notifications'}>
-            <BellIcon size={20} />
-            {unread && <span className="badge-dot" />}
-          </Link>
-          <Avatar name={me.name} to="/profile" />
-        </div>
+        <HeaderActions me={me} showVerify={false} />
       </div>
       <div className="card-tint" style={{ borderRadius: 20, padding: 20, gap: 8 }}>
         <div className="grid-2">

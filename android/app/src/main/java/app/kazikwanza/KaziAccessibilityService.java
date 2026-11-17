@@ -21,7 +21,7 @@ import java.util.Set;
  * Watches which app is in front and enforces the rules in {@link LockStore}:
  *
  * <ul>
- *   <li>Scrolling apps (TikTok, Instagram, YouTube, X) spend 1 scroll per swipe gesture.</li>
+ *   <li>Scrolling apps (TikTok, Instagram, Facebook, YouTube and Shorts, X) spend 1 scroll per swipe up or down.</li>
  *   <li>Other locked apps spend screen-time seconds while they are on screen.</li>
  *   <li>With nothing left, the app is sent home and Kazikwanza's lock screen opens.</li>
  * </ul>
@@ -32,12 +32,17 @@ import java.util.Set;
 public class KaziAccessibilityService extends AccessibilityService {
 
     /** Scroll events closer together than this belong to one swipe. */
-    private static final long GESTURE_GAP_MS = 650;
+    static final long GESTURE_GAP_MS = 650;
+    /** Apps restore their scroll position as they open; that isn't the person swiping. */
+    static final long OPEN_GRACE_MS = 800;
     /** Running screen time is written down this often so a crash loses little. */
     private static final long FLUSH_MS = 15_000;
     private static final long TICK_MS = 1_000;
     /** Don't re-open the lock screen in a tight loop. */
     private static final long LOCK_COOLDOWN_MS = 1_500;
+
+    /** True while Android has the service running. */
+    static volatile boolean running;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private LockStore store;
@@ -46,6 +51,7 @@ public class KaziAccessibilityService extends AccessibilityService {
     private String foreground;
     private String session = "";
     private long lastScrollAt;
+    private long foregroundSince;
 
     /** Start of the stretch of screen time not yet written to the store, or 0 when not timing. */
     private long timingSince;
@@ -88,6 +94,7 @@ public class KaziAccessibilityService extends AccessibilityService {
         // An app may already be open when the service starts.
         String pkg = currentPackageFromUsageStats();
         if (pkg != null) onForeground(pkg);
+        running = true;
     }
 
     @Override
@@ -99,7 +106,7 @@ public class KaziAccessibilityService extends AccessibilityService {
                 if (!ignoredPackages.contains(pkg)) onForeground(pkg);
                 break;
             case AccessibilityEvent.TYPE_VIEW_SCROLLED:
-                if (pkg.equals(foreground)) onScroll(pkg);
+                if (pkg.equals(foreground) && !isSideways(event)) onScroll(pkg);
                 break;
             default:
                 break;
@@ -113,6 +120,7 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        running = false;
         stopTiming();
         try {
             unregisterReceiver(screenReceiver);
@@ -128,7 +136,8 @@ public class KaziAccessibilityService extends AccessibilityService {
         if (pkg.equals(foreground)) return;
         stopTiming();
         foreground = pkg;
-        session = pkg + ":" + System.currentTimeMillis();
+        foregroundSince = System.currentTimeMillis();
+        session = pkg + ":" + foregroundSince;
         lastScrollAt = 0;
         refreshKeyboards();
 
@@ -152,6 +161,7 @@ public class KaziAccessibilityService extends AccessibilityService {
         LockStore.LockedApp app = store.appFor(pkg);
         if (app == null || !LockStore.KIND_SCROLLS.equals(app.kind)) return;
         long now = System.currentTimeMillis();
+        if (now - foregroundSince < OPEN_GRACE_MS) return;
         boolean newGesture = now - lastScrollAt > GESTURE_GAP_MS;
         lastScrollAt = now;
         if (!newGesture || store.freeNow(now)) return;
@@ -208,6 +218,16 @@ public class KaziAccessibilityService extends AccessibilityService {
     }
 
     /* ───────── Helpers ───────── */
+
+    /**
+     * Story trays and photo carousels scroll sideways inside a feed; only
+     * moving up or down through posts counts. Android reports how far a list
+     * moved from version 9 on (-1 means "not reported").
+     */
+    static boolean isSideways(AccessibilityEvent event) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false;
+        return event.getScrollDeltaY() == 0 && event.getScrollDeltaX() != 0 && event.getScrollDeltaX() != -1;
+    }
 
     /** Keyboards open their own windows; they must not count as leaving the app. */
     private void refreshKeyboards() {

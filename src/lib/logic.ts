@@ -3,11 +3,12 @@
  * unit tested without a browser. Each mutation takes `now` explicitly.
  */
 import { APPS, DEFAULT_LOCKED, getApp } from './apps';
-import { DAY, HOUR, MINUTE, clockToday, dayKey, formatClock, isWeekday, startOfDay, startOfWeek } from './time';
+import { DAY, HOUR, MINUTE, clockToday, dayKey, formatClock, isValidTimeZone, isWeekday, startOfDay, startOfWeek } from './time';
 import type {
   Account,
   AppData,
   LedgerEntry,
+  Message,
   Mode,
   Repeat,
   RewardKind,
@@ -38,6 +39,7 @@ export function emptyData(): AppData {
     notifications: [],
     linkCodes: [],
     timeRequests: [],
+    messages: [],
   };
 }
 
@@ -109,11 +111,13 @@ export interface NewAccount {
   name: string;
   email: string;
   passwordHash: string;
+  timeZone?: string;
 }
 
 export function createAccount(data: AppData, input: NewAccount, now: number): { data: AppData; id: string } {
   const name = input.name.trim();
   if (!name) throw new KaziError('Enter your name');
+  if (name.length > 40) throw new KaziError('Keep your name under 40 characters');
   if (!isValidContact(input.email)) throw new KaziError('Enter a valid email or phone number');
   if (findAccountByContact(data, input.email)) throw new KaziError('An account with this email or phone already exists. Sign in instead.');
   const next = clone(data);
@@ -140,6 +144,8 @@ export function createAccount(data: AppData, input: NewAccount, now: number): { 
     lastDay: dayKey(now),
     unlockNoticeDay: null,
     lowScrollNoticeDay: null,
+    nativeSeqs: {},
+    ...(isValidTimeZone(input.timeZone) ? { timeZone: input.timeZone } : {}),
   };
   next.sessionId = id;
   return { data: next, id };
@@ -739,7 +745,7 @@ export function joinFamily(data: AppData, childId: string, rawCode: string, now:
   const parent = account(next, link.parentId);
   child.parentId = parent.id;
   child.mode = 'child';
-  child.lockedApps = ['tiktok', 'instagram', 'youtube', 'minecraft', 'netflix'];
+  child.lockedApps = [...DEFAULT_LOCKED];
   child.unlockTime = '18:00';
   child.verifier = null;
   next.linkCodes = next.linkCodes.filter((c) => c.code !== code);
@@ -856,31 +862,27 @@ export interface NativeRules {
   ackSeq: number;
 }
 
-export function setDeviceOwner(data: AppData, accountId: string): AppData {
-  account(data, accountId);
-  if (data.deviceOwnerId === accountId) return data;
-  return { ...data, deviceOwnerId: accountId };
-}
-
-export function nativeRules(a: Account): NativeRules {
+/** The rules one phone should enforce for this account. */
+export function nativeRules(a: Account, deviceId: string): NativeRules {
   return {
     enabled: a.onboarded && a.lockedApps.length > 0,
     apps: APPS.filter((x) => a.lockedApps.includes(x.id)).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
     scrolls: a.scrolls,
     screenSeconds: a.screenSeconds,
     unlockTime: a.unlockTime ?? '',
-    ackSeq: a.nativeSeq ?? 0,
+    ackSeq: a.nativeSeqs?.[deviceId] ?? 0,
   };
 }
 
 /**
  * Charges usage recorded by the phone to the account. Safe to call with the
- * same events twice: anything at or below the account's nativeSeq is skipped.
+ * same events twice: anything at or below the last event applied from that phone is skipped.
  */
-export function applyNativeEvents(data: AppData, accountId: string, events: NativeUsageEvent[], now: number): AppData {
+export function applyNativeEvents(data: AppData, accountId: string, deviceId: string, events: NativeUsageEvent[], now: number): AppData {
   const a0 = data.accounts[accountId];
   if (!a0) return data;
-  const fresh = events.filter((e) => e.seq > (a0.nativeSeq ?? 0)).sort((x, y) => x.seq - y.seq);
+  const seen = a0.nativeSeqs?.[deviceId] ?? 0;
+  const fresh = events.filter((e) => e.seq > seen).sort((x, y) => x.seq - y.seq);
   if (fresh.length === 0) return data;
   const next = clone(data);
   const a = account(next, accountId);
@@ -888,7 +890,7 @@ export function applyNativeEvents(data: AppData, accountId: string, events: Nati
   for (const e of fresh) {
     const app = getApp(e.appId);
     const name = app?.name ?? e.appId;
-    const ledgerId = `n_${e.session}`;
+    const ledgerId = `n_${deviceId}_${e.session}`;
     const line = a.ledger.find((l) => l.id === ledgerId);
     if (e.kind === 'scrolls') {
       const n = Math.max(0, Math.round(e.amount));
@@ -910,7 +912,93 @@ export function applyNativeEvents(data: AppData, accountId: string, events: Nati
         pushLedger(a, { at: e.at, label: `Played ${name}`, amount: -Math.round(secs / 60), unit: 'minutes', seconds: secs }, ledgerId);
       }
     }
-    a.nativeSeq = e.seq;
+    a.nativeSeqs = { ...a.nativeSeqs, [deviceId]: e.seq };
   }
   return next;
+}
+
+/* ───────────────────────── People & messages ───────────────────────── */
+
+export const MESSAGE_MAX_LENGTH = 1000;
+const MESSAGE_LIMIT = 20_000;
+
+/** Someone the person can see and message. `id` is null for a verifier who hasn't joined yet. */
+export interface Contact {
+  id: string | null;
+  name: string;
+  contact: string;
+  roles: string[];
+  /** The person picked me as their verifier. */
+  checksWith: boolean;
+}
+
+/** Everyone connected to an account: its verifier, the people it checks for, its parent and children. */
+export function contactsOf(data: AppData, meId: string): Contact[] {
+  const me = data.accounts[meId];
+  if (!me) return [];
+  const out = new Map<string, Contact>();
+  const add = (a: Account | undefined, role: string, checksWith = false) => {
+    if (!a || a.id === meId) return;
+    const c = out.get(a.id);
+    if (c) {
+      if (!c.roles.includes(role)) c.roles.push(role);
+      c.checksWith = c.checksWith || checksWith;
+    } else {
+      out.set(a.id, { id: a.id, name: a.name, contact: a.email, roles: [role], checksWith });
+    }
+  };
+  if (me.verifier) {
+    const v = findAccountByContact(data, me.verifier.contact);
+    if (v) add(v, `Checks your work · ${me.verifier.relation}`);
+    else
+      out.set(`pending:${normalizeContact(me.verifier.contact)}`, {
+        id: null,
+        name: me.verifier.contact,
+        contact: me.verifier.contact,
+        roles: ['Your verifier · hasn\u2019t joined yet'],
+        checksWith: false,
+      });
+  }
+  const myKey = normalizeContact(me.email);
+  for (const a of Object.values(data.accounts)) {
+    if (a.verifier && normalizeContact(a.verifier.contact) === myKey) add(a, 'You check their work', true);
+  }
+  // People still waiting on a photo I can check, even if they've since picked someone else.
+  for (const t of requestsFor(data, meId)) if (!t.verifierId) add(data.accounts[t.ownerId], 'You check their work', true);
+  if (me.parentId) add(data.accounts[me.parentId], 'Your parent');
+  for (const child of childrenOf(data, meId)) add(child, 'Your child');
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function canMessage(data: AppData, fromId: string, toId: string): boolean {
+  return fromId !== toId && contactsOf(data, fromId).some((c) => c.id === toId);
+}
+
+export function sendMessage(data: AppData, fromId: string, toId: string, rawText: string, now: number): AppData {
+  const text = rawText.trim();
+  if (!text) throw new KaziError('Write a message first');
+  if (text.length > MESSAGE_MAX_LENGTH) throw new KaziError(`Keep messages under ${MESSAGE_MAX_LENGTH} characters`);
+  account(data, fromId);
+  if (!data.accounts[toId]) throw new KaziError('That person isn\u2019t on Kazikwanza yet');
+  if (!canMessage(data, fromId, toId)) {
+    throw new KaziError('You can message your verifier, the people you check, your parent or your children');
+  }
+  const message: Message = { id: newId('m'), from: fromId, to: toId, text, at: now, read: false };
+  const messages = [...data.messages, message];
+  if (messages.length > MESSAGE_LIMIT) messages.splice(0, messages.length - MESSAGE_LIMIT);
+  return { ...data, messages };
+}
+
+/** Messages between two people, oldest first. */
+export function threadBetween(data: AppData, a: string, b: string): Message[] {
+  return data.messages.filter((m) => (m.from === a && m.to === b) || (m.from === b && m.to === a)).sort((x, y) => x.at - y.at);
+}
+
+export function markThreadRead(data: AppData, meId: string, otherId: string): AppData {
+  if (!data.messages.some((m) => m.from === otherId && m.to === meId && !m.read)) return data;
+  return { ...data, messages: data.messages.map((m) => (m.from === otherId && m.to === meId && !m.read ? { ...m, read: true } : m)) };
+}
+
+export function unreadMessages(data: AppData, meId: string): number {
+  return data.messages.filter((m) => m.to === meId && !m.read).length;
 }

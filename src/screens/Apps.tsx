@@ -9,19 +9,14 @@ import {
   EMERGENCY_SCROLLS,
   EMERGENCY_WAIT_SECONDS,
   accessFor,
-  askForTime,
-  closeSession,
   emergencyLeft,
-  emergencyUnlock,
   newId,
   minutesLeft,
   remainingSeconds,
   rewardLabel,
-  spendScroll,
-  startSession,
   todaysTasks,
 } from '../lib/logic';
-import { run, toast, useAccount, useData, useNow, useStore } from '../lib/store';
+import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { KaziLock, isNativeAndroid, pumpNative } from '../lib/native';
 import { formatClock, formatMinSec } from '../lib/time';
 import type { Account } from '../lib/types';
@@ -138,22 +133,25 @@ function Feed({ app }: { app: LockableApp }) {
   const access = accessFor(me, app.id, now);
   const close = useBack('/apps');
 
+  // Swipes are charged one at a time, in order, even if the server is slow to answer.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const lockedOut = useRef(false);
+
   function onScroll() {
     const el = ref.current;
     if (!el || el.clientHeight === 0) return;
     const index = Math.round(el.scrollTop / el.clientHeight);
     if (index + 4 > count) setCount(index + 8);
     while (seen.current < index) {
-      const store = useStore.getState();
-      const me0 = store.data.sessionId ? store.data.accounts[store.data.sessionId] : null;
-      if (!me0) return;
-      const { data, result } = spendScroll(store.data, me0.id, app.id, sessionKey.current, Date.now());
-      if (result === 'locked') {
-        navigate(`/locked/${app.id}`, { replace: true });
-        return;
-      }
       seen.current += 1;
-      if (data !== store.data) run(() => data);
+      queue.current = queue.current.then(async () => {
+        if (lockedOut.current) return;
+        const { ok, result } = await act('spendScroll', { appId: app.id, sessionKey: sessionKey.current });
+        if (ok && result === 'locked') {
+          lockedOut.current = true;
+          navigate(`/locked/${app.id}`, { replace: true });
+        }
+      });
     }
   }
 
@@ -201,17 +199,22 @@ function TimedApp({ app }: { app: LockableApp }) {
 
   useEffect(() => {
     if (!session) {
-      if (!run((d, t) => startSession(d, me.id, app.id, t))) navigate(`/locked/${app.id}`, { replace: true });
+      void act('startSession', { appId: app.id }).then(({ ok }) => {
+        if (!ok) navigate(`/locked/${app.id}`, { replace: true });
+      });
     }
     // Start once per visit; the session survives leaving the screen, like a real app in the background.
   }, []);
 
+  const closing = useRef(false);
   useEffect(() => {
-    if (session && !session.free && remaining <= 0) {
-      run((d) => closeSession(d, me.id, session.startedAt + d.accounts[me.id].screenSeconds * 1000));
-      navigate(`/locked/${app.id}`, { replace: true });
+    if (session && !session.free && remaining <= 0 && !closing.current) {
+      closing.current = true;
+      void act('closeSession', { at: session.startedAt + me.screenSeconds * 1000 }).then(() =>
+        navigate(`/locked/${app.id}`, { replace: true }),
+      );
     }
-  }, [session, remaining, me.id, app.id, navigate]);
+  }, [session, remaining, me.screenSeconds, app.id, navigate]);
 
   return (
     <main className="screen centered" style={{ background: app.color, color: '#fff' }}>
@@ -228,8 +231,8 @@ function TimedApp({ app }: { app: LockableApp }) {
       <div className="spacer" />
       <button
         className="btn btn-white"
-        onClick={() => {
-          run((d, t) => closeSession(d, me.id, t));
+        onClick={async () => {
+          await act('closeSession');
           navigate(homePath(me), { replace: true });
         }}
       >
@@ -324,8 +327,8 @@ export function Locked() {
             <button
               className="btn btn-secondary"
               disabled={askOpen}
-              onClick={() => {
-                if (run((d, t) => askForTime(d, me.id, app.id, t))) toast(`Asked ${parent.name} for more time`);
+              onClick={async () => {
+                if ((await act('askForTime', { appId: app.id })).ok) toast(`Asked ${parent.name} for more time`);
               }}
             >
               {askOpen ? `Waiting for ${parent.name}…` : `Ask ${parent.name} for more time`}
@@ -400,8 +403,8 @@ export function Emergency() {
         <button
           className="btn btn-primary"
           disabled={!ready || left === 0}
-          onClick={() => {
-            if (run((d, t) => emergencyUnlock(d, me.id, app.id, t))) {
+          onClick={async () => {
+            if ((await act('emergencyUnlock', { appId: app.id })).ok) {
               // Hand the new balance to the phone before the real app opens.
               void pumpNative().then(() => launch(app, navigate, true));
             }

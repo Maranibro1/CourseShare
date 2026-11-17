@@ -13,6 +13,7 @@ export interface LockableApp {
 export const APPS: LockableApp[] = [
   { id: 'tiktok', name: 'TikTok', kind: 'scrolls', color: '#111827', packages: ['com.zhiliaoapp.musically', 'com.ss.android.ugc.trill'] },
   { id: 'instagram', name: 'Instagram', kind: 'scrolls', color: '#BE185D', packages: ['com.instagram.android', 'com.instagram.lite'] },
+  { id: 'facebook', name: 'Facebook', kind: 'scrolls', color: '#1D4ED8', packages: ['com.facebook.katana', 'com.facebook.lite'] },
   { id: 'youtube', name: 'YouTube', kind: 'scrolls', color: '#B91C1C', packages: ['com.google.android.youtube'] },
   { id: 'x', name: 'X', kind: 'scrolls', color: '#18181B', packages: ['com.twitter.android', 'com.twitter.android.lite'] },
   { id: 'minecraft', name: 'Minecraft', kind: 'minutes', color: '#3F6212', packages: ['com.mojang.minecraftpe'] },
@@ -23,7 +24,7 @@ export const APPS: LockableApp[] = [
 export const SCROLL_APPS = APPS.filter((a) => a.kind === 'scrolls');
 export const TIME_APPS = APPS.filter((a) => a.kind === 'minutes');
 
-export const DEFAULT_LOCKED = ['tiktok', 'instagram', 'youtube', 'minecraft', 'netflix'];
+export const DEFAULT_LOCKED = ['tiktok', 'instagram', 'facebook', 'youtube', 'minecraft', 'netflix'];
 
 export function getApp(id: string): LockableApp | undefined {
   return APPS.find((a) => a.id === id);

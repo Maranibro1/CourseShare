@@ -122,3 +122,38 @@ export const GridIcon = (p: IconProps) => (
     <rect x="14" y="14" width="6" height="6" rx="1.5" />
   </Svg>
 );
+
+export const ChatIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 5.5h16v10.5H9l-5 4z" />
+    <path d="M8.5 9.5h7M8.5 12.5h4.5" />
+  </Svg>
+);
+
+/** "People I check": a person with a tick. */
+export const VerifyIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5 1.6 0 3 .5 4.1 1.4M15 17.5l2.2 2.2 4.3-4.7" />
+  </Svg>
+);
+
+export const DownloadIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />
+  </Svg>
+);
+
+/** The iPhone share button (box with an arrow). */
+export const ShareIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1" />
+  </Svg>
+);
+
+export const AddSquareIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="4" />
+    <path d="M12 8.5v7M8.5 12h7" />
+  </Svg>
+);

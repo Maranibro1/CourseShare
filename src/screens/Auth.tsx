@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { CheckIcon } from '../components/Icons';
+import { InstallCard } from '../components/Install';
 import { BackButton } from '../components/ui';
-import { KaziError, createAccount, signIn } from '../lib/logic';
-import { hashPassword, run, useStore } from '../lib/store';
+import { SERVER_MODE, errorMessage, signIn, signUp } from '../lib/store';
 
 export function Welcome() {
   return (
@@ -21,6 +21,7 @@ export function Welcome() {
           Then scroll.
         </p>
       </div>
+      <InstallCard />
       <div className="actions" style={{ gap: 12 }}>
         <Link to="/signup" className="btn btn-white">
           Get started
@@ -50,14 +51,10 @@ export function SignUp() {
     }
     setBusy(true);
     try {
-      const passwordHash = await hashPassword(email, password);
-      const data = useStore.getState().data;
-      const result = createAccount(data, { name, email, passwordHash }, Date.now());
-      run(() => result.data);
+      await signUp({ name, email, password });
       navigate('/onboarding/mode', { replace: true });
     } catch (err) {
-      if (err instanceof KaziError) setError(err.message);
-      else throw err;
+      setError(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -114,7 +111,9 @@ export function SignUp() {
         <button className="btn btn-primary" type="submit" disabled={busy}>
           Create account
         </button>
-        <span className="note">Your account and tasks are stored on this phone.</span>
+        <span className="note">
+          {SERVER_MODE ? 'Your verifier and family see your tasks on their own phones.' : 'Your account and tasks are stored on this phone.'}
+        </span>
       </div>
     </form>
   );
@@ -125,18 +124,19 @@ export function SignIn() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
-    const passwordHash = await hashPassword(email, password);
+    setBusy(true);
     try {
-      const next = signIn(useStore.getState().data, email, passwordHash);
-      run(() => next);
+      await signIn({ email, password });
       navigate('/', { replace: true });
     } catch (err) {
-      if (err instanceof KaziError) setError(err.message);
-      else throw err;
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -180,7 +180,7 @@ export function SignIn() {
       </div>
       <div className="spacer" />
       <div className="actions">
-        <button className="btn btn-primary" type="submit">
+        <button className="btn btn-primary" type="submit" disabled={busy}>
           Sign in
         </button>
         <Link to="/signup" className="link-btn">

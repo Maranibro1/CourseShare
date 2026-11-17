@@ -5,24 +5,18 @@ import { BackButton, Row, Sheet, Thumb, useBack } from '../components/ui';
 import {
   MAX_REWARD,
   QUESTIONS_FALLBACK_MS,
-  addTask,
+  approverFor,
   approverName,
   canFallBackToQuestions,
-  completeWithQuestions,
-  deleteTask,
-  editTask,
   findAccountByContact,
-  markRewardSeen,
   minutesLeft,
-  remindApprover,
   rewardLabel,
   rewardWords,
   streakDays,
-  submitPhoto,
 } from '../lib/logic';
 import { compressImage, deletePhoto, savePhoto } from '../lib/photos';
 import { MIN_ANSWER_LENGTH, questionsFor } from '../lib/questions';
-import { run, toast, useAccount, useData, useNow } from '../lib/store';
+import { SERVER_MODE, act, errorMessage, toast, useAccount, useData, useNow } from '../lib/store';
 import { formatAdded, formatClock, formatHoursMinutes, timeAgo } from '../lib/time';
 import type { Account, Repeat, RewardKind, Task, VerifyMethod } from '../lib/types';
 
@@ -97,7 +91,7 @@ export function RewardPicker({
       </div>
       <span className="small">
         {kind === 'scrolls'
-          ? 'Scrolls unlock TikTok, Instagram and YouTube. Screen time (minutes) unlocks games and other apps.'
+          ? 'Scrolls unlock TikTok, Instagram, Facebook, YouTube and X. Screen time (minutes) unlocks games and other apps.'
           : 'Minutes of screen time for games and other apps.'}
       </span>
       <div className="option-grid">
@@ -180,24 +174,25 @@ export function TaskForm() {
   const [amount, setAmount] = useState(existing?.reward.amount ?? 50);
   const [verify, setVerify] = useState<VerifyMethod>(existing?.verify ?? (me.verifier ? 'photo' : 'questions'));
   const [repeat, setRepeat] = useState<Repeat>(existing?.repeat ?? 'never');
+  const [saving, setSaving] = useState(false);
 
   if (editing && !existing) return <MissingTask />;
 
-  function save() {
+  async function save() {
+    if (saving) return;
     const input = { title, rewardKind: kind, amount, verify, repeat };
-    if (editing && existing) {
-      if (run((d) => editTask(d, existing.id, me.id, input))) {
-        toast('Task updated');
-        back();
+    setSaving(true);
+    try {
+      if (editing && existing) {
+        if ((await act('editTask', { taskId: existing.id, input })).ok) {
+          toast('Task updated');
+          back();
+        }
+      } else if ((await act('addTask', { input })).ok) {
+        navigate('/home', { replace: true });
       }
-    } else {
-      let newId = '';
-      const ok = run((d, now) => {
-        const r = addTask(d, me.id, input, now);
-        newId = r.id;
-        return r.data;
-      });
-      if (ok && newId) navigate('/home', { replace: true });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -324,8 +319,8 @@ export function TaskDetail() {
         <button
           className="btn btn-primary"
           style={{ background: '#B91C1C' }}
-          onClick={() => {
-            if (run((d) => deleteTask(d, task.id, me.id))) {
+          onClick={async () => {
+            if ((await act('deleteTask', { taskId: task.id })).ok) {
               void deletePhoto(task.id);
               toast('Task deleted');
               navigate(task.verifierId ? '/family' : homePath(me), { replace: true });
@@ -371,13 +366,14 @@ export function VerifyPhoto() {
     setBusy(true);
     try {
       await savePhoto(task.id, photo);
-    } catch {
+    } catch (err) {
       setBusy(false);
-      toast('Could not save the photo on this phone. Free up some space and try again.');
+      toast(SERVER_MODE ? errorMessage(err) : 'Could not save the photo on this phone. Free up some space and try again.');
       return;
     }
+    const { ok } = await act('submitPhoto', { taskId: task.id });
     setBusy(false);
-    if (run((d, now) => submitPhoto(d, task.id, me.id, now))) navigate(`/task/${task.id}/waiting`, { replace: true });
+    if (ok) navigate(`/task/${task.id}/waiting`, { replace: true });
   }
 
   const canSend = task.ownerId === me.id && (task.status === 'todo' || task.status === 'redo');
@@ -432,6 +428,7 @@ export function Waiting() {
 
   if (!task) return <MissingTask />;
   const who = approverName(data, task);
+  const approver = approverFor(data, task);
   const sinceSent = task.submittedAt ? now - task.submittedAt : 0;
   const fallbackIn = QUESTIONS_FALLBACK_MS - sinceSent;
   const canFallback = canFallBackToQuestions(task, now);
@@ -476,12 +473,17 @@ export function Waiting() {
         </Link>
         <button
           className="btn btn-secondary"
-          onClick={() => {
-            if (run((d, t) => remindApprover(d, task.id, me.id, t))) toast(`Reminder sent to ${who}`);
+          onClick={async () => {
+            if ((await act('remindApprover', { taskId: task.id })).ok) toast(`Reminder sent to ${who}`);
           }}
         >
           Remind {who}
         </button>
+        {approver && (
+          <Link to={`/messages/${approver.id}`} className="btn btn-secondary">
+            Message {who}
+          </Link>
+        )}
         {!task.verifierId &&
           (canFallback ? (
             <Link to={`/task/${task.id}/questions`} className="link-btn strong" style={{ alignSelf: 'center' }}>
@@ -498,13 +500,13 @@ export function Waiting() {
 /* ───────── Questions ───────── */
 
 export function Questions() {
-  const me = useAccount();
   const task = useTask();
   const navigate = useNavigate();
   const back = useBack(task ? `/task/${task.id}` : '/home');
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<string[]>(['', '', '']);
   const [honest, setHonest] = useState(false);
+  const [sending, setSending] = useState(false);
   if (!task) return <MissingTask />;
 
   const questions = questionsFor(task.title);
@@ -513,15 +515,16 @@ export function Questions() {
   const last = step === total - 1;
   const enough = answer.trim().length >= MIN_ANSWER_LENGTH;
 
-  function next() {
-    if (!task) return;
+  async function next() {
+    if (!task || sending) return;
     if (!last) {
       setStep(step + 1);
       return;
     }
-    if (run((d, now) => completeWithQuestions(d, task.id, me.id, answers, now))) {
-      navigate(`/earned/${task.id}`, { replace: true });
-    }
+    setSending(true);
+    const { ok } = await act('completeWithQuestions', { taskId: task.id, answers });
+    setSending(false);
+    if (ok) navigate(`/earned/${task.id}`, { replace: true });
   }
 
   return (
@@ -582,7 +585,7 @@ export function Earned() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (task && !task.rewardSeen) run((d) => markRewardSeen(d, task.id));
+    if (task && !task.rewardSeen) void act('markRewardSeen', { taskId: task.id });
     if (task?.approvedBy) void deletePhoto(task.id);
   }, [task]);
 

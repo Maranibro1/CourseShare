@@ -20,10 +20,23 @@ android {
         // Android framework stubs return defaults in plain JVM unit tests.
         unitTests.returnDefaultValues = true
     }
+    // A fixed release key, when CI provides one (see .github/workflows/android.yml).
+    def keystore = System.getenv("KAZI_KEYSTORE")
+    signingConfigs {
+        if (keystore) {
+            release {
+                storeFile file(keystore)
+                storePassword System.getenv("KAZI_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KAZI_KEY_ALIAS")
+                keyPassword System.getenv("KAZI_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystore) signingConfig signingConfigs.release
         }
     }
 }
@@ -43,6 +56,10 @@ dependencies {
     testImplementation "junit:junit:$junitVersion"
     // The framework's org.json is a stub in unit tests; use the real library there.
     testImplementation "org.json:json:20231013"
+    // On-device lock tests (run on an emulator in CI, with the stand-in apps installed).
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test:runner:1.5.2"
+    androidTestImplementation "androidx.test.uiautomator:uiautomator:2.3.0"
     implementation project(':capacitor-cordova-android-plugins')
 }
 

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { applyNativeEvents, nativeRules, type NativeRules, type NativeUsageEvent } from './logic';
-import { run, useStore } from './store';
-import type { AppData } from './types';
+import { deviceId, deviceOwner } from './device';
+import { SERVER_MODE, act, useStore } from './store';
+import type { Account, AppData } from './types';
 
 interface KaziLockPlugin {
   getStatus(): Promise<{ accessibility: boolean; usage: boolean }>;
@@ -47,8 +48,16 @@ export function useLockStatus(): { accessibility: boolean; usage: boolean } | nu
   return status;
 }
 
-function owner(data: AppData) {
-  return data.deviceOwnerId ? data.accounts[data.deviceOwnerId] : undefined;
+/**
+ * The full account whose rules this phone enforces, or undefined. With the
+ * server, only the signed-in person's own account is complete, so if someone
+ * else is signed in on this phone the last rules simply stay in force.
+ */
+function owner(data: AppData): Account | undefined {
+  const id = deviceOwner();
+  if (!id) return undefined;
+  if (SERVER_MODE && data.sessionId !== id) return undefined;
+  return data.accounts[id];
 }
 
 let pumping = false;
@@ -60,10 +69,19 @@ export async function pumpNative(): Promise<void> {
   try {
     const before = owner(useStore.getState().data);
     if (!before) return;
-    const { events } = await KaziLock.drain({ after: before.nativeSeq ?? 0 });
-    if (events.length > 0) run((d, now) => applyNativeEvents(d, before.id, events, now));
+    const device = deviceId();
+    const { events } = await KaziLock.drain({ after: before.nativeSeqs?.[device] ?? 0 });
+    if (events.length > 0) {
+      if (SERVER_MODE) {
+        const { ok } = await act('applyNativeEvents', { deviceId: device, events });
+        if (!ok) return;
+      } else {
+        const { data, setData } = useStore.getState();
+        setData(applyNativeEvents(data, before.id, device, events, Date.now()));
+      }
+    }
     const after = owner(useStore.getState().data);
-    if (after) await KaziLock.sync(nativeRules(after));
+    if (after) await KaziLock.sync(nativeRules(after, device));
   } catch {
     // The service may be off or the plugin missing in an old build; try again next time.
   } finally {
@@ -96,7 +114,7 @@ export function useNativeBridge() {
     const unsubscribe = useStore.subscribe((s) => {
       const a = owner(s.data);
       if (!a) return;
-      const rules = nativeRules(a);
+      const rules = nativeRules(a, deviceId());
       const key = JSON.stringify(rules);
       if (key === lastRules.current) return;
       lastRules.current = key;

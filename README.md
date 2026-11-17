@@ -48,7 +48,7 @@ The `android/` folder wraps the same app with [Capacitor](https://capacitorjs.co
 
 | File | What it does |
 | --- | --- |
-| `KaziAccessibilityService.java` | Sees which app is in front and counts each swipe in TikTok, Instagram, YouTube or X as 1 scroll. It times Minecraft, Netflix and Snapchat against screen time. When the balance runs out it sends the phone home and opens Kazikwanza's lock screen. It never reads what is on screen. |
+| `KaziAccessibilityService.java` | Sees which app is in front and counts each swipe up or down in TikTok, Instagram, Facebook, YouTube (including Shorts) or X as 1 scroll. It times Minecraft, Netflix and Snapchat against screen time. When the balance runs out it sends the phone home and opens Kazikwanza's lock screen. It never reads what is on screen. |
 | `LockStore.java` | Holds the rules and balances the phone enforces, plus a numbered log of usage, so nothing is counted twice or lost if the app is closed. |
 | `KaziLockPlugin.java` | The bridge to the web app. It checks the two permissions, opens the right Settings pages, receives rules and balances, hands over usage, and opens real apps. |
 | `src/lib/native.ts` | The app side: it pulls usage into the wallet every few seconds and on resume, and pushes rule changes straight away. |
