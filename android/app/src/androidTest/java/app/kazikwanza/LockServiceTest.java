@@ -66,7 +66,8 @@ public class LockServiceTest {
     @Before
     public void reset() throws Exception {
         device.pressHome();
-        SystemClock.sleep(1_000);
+        // Longer than the service's pause between two lock screens.
+        SystemClock.sleep(2_500);
         store = LockStore.get(context);
     }
 
@@ -220,8 +221,8 @@ public class LockServiceTest {
         device.pressHome();
         SystemClock.sleep(1_500);
         double left = store.secondsLeft();
-        // Open for about 3.7 s (grace pause + 3 s), give or take event timing.
-        assertTrue("charged about 4 seconds, left " + left, left > 54 && left < 58);
+        // Open for about 4.5 s (opening + grace pause + 3 s), give or take event timing.
+        assertTrue("charged about 4-7 seconds, left " + left, left > 52 && left < 58);
     }
 
     @Test

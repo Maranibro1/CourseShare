@@ -68,8 +68,8 @@ public class StandInActivity extends Activity {
                     RecyclerView stories = new RecyclerView(parent.getContext());
                     stories.setContentDescription("stories");
                     stories.setLayoutManager(new LinearLayoutManager(parent.getContext(), LinearLayoutManager.HORIZONTAL, false));
-                    stories.setAdapter(new Posts(ViewGroup.LayoutParams.MATCH_PARENT, 50, 400));
-                    stories.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 500));
+                    stories.setAdapter(new Posts(ViewGroup.LayoutParams.MATCH_PARENT, 50, 160));
+                    stories.setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 180));
                     return new RecyclerView.ViewHolder(stories) {};
                 }
                 return new RecyclerView.ViewHolder(label("", 0, 900)) {};
