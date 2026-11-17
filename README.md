@@ -2,87 +2,117 @@
 
 *Do the work first. Then scroll.* (Kazikwanza is Swahili for "work first".)
 
-Kazikwanza locks your social apps and makes you earn your scrolling. You finish the tasks on your own to-do list, get them verified, and earn **scrolls** (TikTok, Instagram, YouTube, X) or **screen time** in minutes (games, Netflix and other apps). At the unlock time you pick, everything opens anyway.
+Kazikwanza locks your social apps and makes you earn your scrolling. You finish the tasks on your own to-do list, get them verified, and earn **scrolls** for TikTok, Instagram, Facebook, YouTube (including Shorts) and X, or **screen time** in minutes for games and other apps. At the unlock time you pick, everything opens anyway.
 
-This repository is the working app, built from the Kazikwanza design file and covering all 31 screens. It runs as an installable web app (PWA) and as an Android app that locks the real apps on the phone (see *Android app* below).
+The app comes in three pieces, all in this repository:
 
-## What works
-
-- **Accounts and onboarding.** Sign up or sign in, choose a mode (for myself, as a parent, as a child), grant permissions, pick which apps to lock, set the daily unlock time (or turn free unlock off), and add a verifier.
-- **Tasks.** Add, edit, delete and repeat tasks (never, every day, every weekday). You set each task's reward in scrolls or minutes, up to 500 scrolls or 240 minutes.
-- **Verification**
-  - *Photo:* take a photo with the camera. It is compressed and sent to your verifier, who approves it or asks for a redo with a reason. If they haven't replied after 3 hours, you can answer questions instead.
-  - *Questions:* three recall questions picked to match the task (reading, studying, exercise, chores, work, or general ones), plus an honesty pledge.
-- **Wallet.** Shows your scroll and screen-time balances, this week's totals, your streak and your history.
-- **Locked apps.** On Android the real apps are locked (see below). On the web, a built-in demo shows the same rules:
-  - Scrolling apps open a swipe feed. Each swipe to a new post costs 1 scroll, and the app locks at 0.
-  - Timed apps run a live countdown that keeps going in the background until you close them.
-  - The locked screen lists the tasks you have left.
-- **Emergency unlock.** After a 60-second wait you get 10 scrolls or 5 minutes. You can do this 3 times a week. Children can't use it; they ask their parent for more time instead.
-- **Family mode**
-  - The parent shares a 6-character code (also shown as a QR code) that expires after 10 minutes. The child joins by typing the code or scanning the QR code.
-  - The parent sets the child's tasks, locked apps and unlock time, approves photos, sees the child's week, and answers requests for more time.
-- **Notifications.** You're notified about approvals, redo requests, reminders, low scrolls, the daily unlock and streaks.
-- **Offline.** A service worker caches the app so it opens without a connection.
-
-## How it's built
-
-- React 18, TypeScript, Vite, React Router (hash routes) and Zustand.
-- All rules live in `src/lib/logic.ts` as pure functions with unit tests. The screens only call them.
-- Data is stored on the device: app state in `localStorage` and proof photos in IndexedDB. Photos are deleted once a task is reviewed.
-- Several accounts can share one device, and open tabs stay in sync. To try verification, sign in as the verifier in another tab, or sign out and back in as them.
-
-## Run it
-
-```bash
-npm install
-npm run dev        # http://localhost:5173
-npm run build      # production build in dist/
-npm test           # unit tests (logic)
-npm run test:e2e   # end-to-end tests in Chromium (Playwright)
-```
-
-## Android app: real locks, scroll counting and screen time
-
-The `android/` folder wraps the same app with [Capacitor](https://capacitorjs.com) and adds a native lock service (`android/app/src/main/java/app/kazikwanza/`):
-
-| File | What it does |
+| Piece | What it is |
 | --- | --- |
-| `KaziAccessibilityService.java` | Sees which app is in front and counts each swipe up or down in TikTok, Instagram, Facebook, YouTube (including Shorts) or X as 1 scroll. It times Minecraft, Netflix and Snapchat against screen time. When the balance runs out it sends the phone home and opens Kazikwanza's lock screen. It never reads what is on screen. |
-| `LockStore.java` | Holds the rules and balances the phone enforces, plus a numbered log of usage, so nothing is counted twice or lost if the app is closed. |
-| `KaziLockPlugin.java` | The bridge to the web app. It checks the two permissions, opens the right Settings pages, receives rules and balances, hands over usage, and opens real apps. |
-| `src/lib/native.ts` | The app side: it pulls usage into the wallet every few seconds and on resume, and pushes rule changes straight away. |
+| **Android app** (`android/`) | Locks the real apps on the phone, counts every swipe, and times games. |
+| **Web app** (`src/`) | All the screens. It runs inside the Android app, and on its own as an installable web app on any phone. |
+| **Sync server** (`server/`) | Shares accounts, tasks, photos and messages between phones, so your verifier or parent can check your work on their own phone. |
 
-### Build the APK
+## Features
 
-Install Node 18+ and Android Studio (or JDK 17 and the Android SDK), then:
+- **Accounts and setup.**
+  - Sign up and choose a mode: for myself, as a parent, or as a child.
+  - Grant the phone permissions, pick which apps to lock, set the daily unlock time, and add a verifier.
+- **Tasks.** You set each task's reward in scrolls or minutes. Tasks can repeat every day or every weekday.
+- **Verification.**
+  - *Photo:* the photo goes to your verifier's phone, and they approve it or ask for a redo.
+  - *Questions:* answer three recall questions on your honour.
+  - If your verifier hasn't replied after 3 hours, you can answer questions instead.
+- **People I verify for.** The icon at the top of the home screen shows a badge with the number of photos waiting for you.
+- **Messages.**
+  - Chat with your verifier, the people you check, your parent or your children.
+  - Unread counts and "Seen" receipts update live.
+  - Nobody else can message you.
+- **Wallet.** Balances, this week's totals, your streak and history. Swipes and game time from the phone show up here.
+- **Emergency unlock.** After a 1-minute wait you get 10 scrolls or 5 minutes, 3 times a week. Children ask their parent for more time instead.
+- **Family mode.**
+  - The parent links a child with a 6-character code or a QR code.
+  - The parent sets the child's tasks, locked apps and unlock time, approves photos, and sees the child's week.
+- **Get the app.** The welcome screen offers the Android download, an *Install app* button on Android and computers, and Add to Home Screen steps on iPhone.
+
+## How the phone lock works
+
+`KaziAccessibilityService` is an Android accessibility service. It only looks at *which* app is on screen and *whether* a list moved; it never reads posts or messages.
+
+- **Swipes.** Each swipe up or down in a locked scrolling app costs 1 scroll. Sideways swipes (story trays, photo carousels) and the moment an app restores its scroll position on opening are free.
+- **Locking.** With no scrolls left, the phone goes to the home screen and Kazikwanza's lock screen opens.
+- **Screen time.** Games and other locked apps use screen time while they're on screen. The clock stops when the screen turns off.
+- **Free time.** From the unlock time until midnight, nothing is charged.
+- **Syncing.** Usage is kept in a numbered log on the phone (`LockStore`) until the app has added it to the wallet, so nothing is lost or counted twice, even offline.
+
+## Download and install
+
+- **Android app:** every build on the main branch is published at
+  **https://github.com/Maranibro1/CourseShare/releases/download/android-latest/kazikwanza.apk**
+  1. Open the link on the phone and install the file. Android will ask you to allow installs from your browser.
+  2. Open Kazikwanza, sign up, and on **Allow access** switch on *Usage access* and the *Kazikwanza app lock*.
+  3. On Android 13 and newer, the app-lock switch is greyed out for apps installed from a file. Open **Settings → Apps → Kazikwanza → ⋮ → Allow restricted settings**, then switch it on.
+- **iPhone, or any phone without the APK:** open the website and use **Add to Home Screen**. Apple doesn't let any app see swipes inside other apps, so the iPhone version can't lock TikTok or Instagram.
+
+## Hosting the server (so messages and verifiers work across phones)
+
+The server is one small Node service that also serves the website. The cheapest set-up is free:
+
+1. **Database.** Create a free Postgres database at [neon.tech](https://neon.tech) and copy its connection string.
+2. **Server.** Open https://render.com/deploy?repo=https://github.com/Maranibro1/CourseShare. Render reads `render.yaml`; paste the connection string as `DATABASE_URL`. You get an address like `https://kazikwanza.onrender.com`.
+3. **Point the Android app at it.** In GitHub, go to **Settings → Secrets and variables → Actions → Variables**, add `KAZI_SERVER_URL` with that address, and re-run the latest workflow. The next APK will sync with your server.
+
+Render's free plan sleeps after 15 minutes without visitors; the first visit after that takes about a minute.
+
+The `Dockerfile` runs anywhere else too. Without `DATABASE_URL`, data goes to `/data` in the container; mount a volume there to keep it.
+
+| Setting | Meaning |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. Without it, data is stored in `DATA_DIR`. |
+| `DATA_DIR` | Folder for the data file and photos (default `data`, `/data` in Docker). |
+| `DEFAULT_TIME_ZONE` | Time zone for accounts that haven't sent theirs (default `Africa/Nairobi`). |
+| `ALLOWED_ORIGINS` | Extra websites allowed to call the API (comma-separated). The Android app is always allowed. |
+| `PORT` | Port to listen on (default 8080). |
+
+**Security.**
+- Passwords are hashed with scrypt, and sign-in tokens are stored only as hashes.
+- Each phone receives only what its owner may see. Every change is checked against the signed-in person: you can't approve your own photo, and a child can't remove their own locks.
+- Photos are deleted once they've been checked.
+
+## Develop
 
 ```bash
 npm install
-npm run build
-npx cap sync android
-cd android && ./gradlew assembleDebug      # APK at android/app/build/outputs/apk/debug/app-debug.apk
+npm run dev                        # the app on its own, data on this device: http://localhost:5173
+npm test                           # logic, permission, time-zone and server tests
+npm run test:e2e                   # browser tests: single-phone and two-phone (through the server)
+npm run build && npm run build:server && npm start   # web app + server on http://localhost:8080
 ```
 
-Or open the `android/` folder in Android Studio and press Run. Once the code is on GitHub, the workflow in `.github/workflows/android.yml` builds the APK on every push. Download it from the run's **Artifacts**.
+To build the web app for the server, set `VITE_SYNC=server`. `VITE_API_URL` gives the server's address when the app isn't served by it (the Android app); `VITE_APK_URL` gives the download button's link.
 
-### Set it up on the phone
+**Android.** Install JDK 17 and the Android SDK, then:
 
-1. Install the APK, sign up and choose **For myself**, or **As a child** on a child's phone.
-2. On **Allow access**:
-   - Tap **Allow** next to *Usage access* and switch Kazikwanza on.
-   - Tap **Allow** next to *Accessibility*, open **Kazikwanza app lock** and switch it on.
-   - On Android 13 and newer, a sideloaded app's accessibility switch is greyed out at first. Open **Settings → Apps → Kazikwanza**, tap **⋮ → Allow restricted settings**, then try again.
-3. Pick the apps to lock. Kazikwanza now enforces them on that phone.
-4. **Settings → Phone lock** shows whether the lock is on. Tap it to fix it if it gets switched off.
+```bash
+npm run build && npx cap sync android
+cd android && ./gradlew assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
+```
 
-### Things to know
+## Tests
 
-- Scroll counting works by spotting swipe gestures, so a fast flick can occasionally count as 1 swipe or 2. The gap that separates one swipe from the next is `GESTURE_GAP_MS` in the service. Tune it after testing on real phones, as the concept doc suggests.
-- iPhone is not supported. Apple doesn't let one app see swipes inside another.
+| What | Where |
+| --- | --- |
+| Rules, permissions, messaging, time zones | `src/lib/*.test.ts` |
+| Server over HTTP (accounts, photos, live updates, persistence) | `server/server.test.ts` |
+| Postgres storage | `server/storage.test.ts` (set `KAZI_TEST_DATABASE_URL`) |
+| Browser, one phone | `tests/e2e/personal.spec.ts`, `family.spec.ts` |
+| Browser, two phones through the server | `tests/e2e/sync.spec.ts` |
+| Phone lock storage | `android/app/src/test` |
+| Phone lock on an Android emulator | `android/app/src/androidTest` |
 
-## Limits of this version
+The emulator tests install the stand-in apps from `android/standins/`. Each stand-in uses the real package name of TikTok, YouTube, Instagram, Facebook, X or Minecraft, and the same kind of list as that app: a full-screen vertical pager, or a feed with a sideways story tray. The tests then swipe through each one. They run on GitHub on every push (`.github/workflows/android.yml`).
 
-- The lock service has been compiled and its storage unit-tested against the Android 14 framework, but it has not been tried on a real phone yet. Test on a few devices before giving it to users.
-- **Verifiers and parents on other phones need a server.** Today, accounts, photos and approvals live on one device. Syncing across phones needs a small backend with accounts and photo storage.
+## Limits
+
+- Each social app scrolls slightly differently, so check the swipe count on real phones and tune `GESTURE_GAP_MS` in `KaziAccessibilityService` if needed. Swipes are counted across all of YouTube, not only Shorts.
+- Without the signing-key secrets described in the workflow, APKs are signed with a debug key. A cached key keeps updates installable, but add a real key before sharing the app widely.
 - Swahili translation and Google sign-in are not included yet.
