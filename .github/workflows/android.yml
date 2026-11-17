@@ -142,7 +142,8 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
-          target: google_apis
+          # Plain Android: Google's images come with the real YouTube, which a stand-in can't replace.
+          target: default
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
