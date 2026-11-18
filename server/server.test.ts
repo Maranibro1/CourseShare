@@ -203,6 +203,26 @@ describe('flows', () => {
     expect((await act(sam.token, 'setChildRules', { childId: child.id, rules: { lockedApps: [], unlockTime: null } })).res.status).toBe(400);
   });
 
+  it("shares a child's phone apps with their parent only", async () => {
+    const parent = await signUp('Wanjiru', 'wanjiru@example.com');
+    const child = await signUp('Kip', 'kip@example.com');
+    const withCode = await act(parent.token, 'createLinkCode');
+    const code = (withCode.data.state as AppData).linkCodes[0].code;
+    expect((await act(child.token, 'joinFamily', { code })).res.status).toBe(200);
+    const apps = [{ pkg: 'com.roblox.client', name: 'Roblox' }];
+    expect((await act(child.token, 'updateProfile', { patch: { phoneApps: apps } })).res.status).toBe(200);
+    const parentState = (await call('/api/state', { token: parent.token })).data.state as AppData;
+    expect(parentState.accounts[child.id].phoneApps).toEqual(apps);
+    expect((await act(parent.token, 'setChildRules', { childId: child.id, rules: { lockedApps: ['youtube', 'pkg:com.roblox.client'], unlockTime: null } })).res.status).toBe(200);
+    const childState = (await call('/api/state', { token: child.token })).data.state as AppData;
+    expect(childState.accounts[child.id].lockedApps).toEqual(['youtube', 'pkg:com.roblox.client']);
+    // Sam's verifier sees Sam's name, never the apps on his phone.
+    await act(sam.token, 'updateProfile', { patch: { phoneApps: apps } });
+    const emmaState = (await call('/api/state', { token: emma.token })).data.state as AppData;
+    expect(emmaState.accounts[sam.id]).toBeDefined();
+    expect(emmaState.accounts[sam.id].phoneApps).toBeUndefined();
+  });
+
   it('accepts phone usage once per phone', async () => {
     const events = [{ seq: 1, appId: 'tiktok', kind: 'scrolls', amount: 7, session: 's1', at: Date.now() }];
     await act(sam.token, 'applyNativeEvents', { deviceId: 'phoneA', events });
