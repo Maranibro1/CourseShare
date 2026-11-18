@@ -154,7 +154,8 @@ public class LockStoreTest {
         rules = new JSONObject(
             "{\"enabled\":true,\"scrolls\":5,\"screenSeconds\":120,\"unlockTime\":\"\",\"ackSeq\":0,\"apps\":[" +
             "{\"id\":\"tiktok\",\"name\":\"TikTok\",\"kind\":\"scrolls\",\"packages\":[\"com.zhiliaoapp.musically\",\"com.ss.android.ugc.trill\"]}," +
-            "{\"id\":\"minecraft\",\"name\":\"Minecraft\",\"kind\":\"minutes\",\"packages\":[\"com.mojang.minecraftpe\"]}]}"
+            "{\"id\":\"minecraft\",\"name\":\"Minecraft\",\"kind\":\"minutes\",\"packages\":[\"com.mojang.minecraftpe\"]}," +
+            "{\"id\":\"youtube\",\"name\":\"YouTube\",\"kind\":\"mixed\",\"packages\":[\"com.google.android.youtube\"]}]}"
         );
         store.sync(rules);
     }
@@ -170,16 +171,16 @@ public class LockStoreTest {
     @Test
     public void swipesMergeUntilDrainedAndNeverChangeAfter() throws Exception {
         LockStore.LockedApp tiktok = store.appFor("com.zhiliaoapp.musically");
-        store.spend(tiktok, "visit", 1, T);
-        store.spend(tiktok, "visit", 1, T + 1);
-        store.spend(tiktok, "visit", 1, T + 2);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "visit", 1, T);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "visit", 1, T + 1);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "visit", 1, T + 2);
         assertEquals(2, store.scrollsLeft());
 
         JSONArray first = store.drain(0);
         assertEquals(1, first.length());
         assertEquals(3.0, first.getJSONObject(0).getDouble("amount"), 0);
 
-        store.spend(tiktok, "visit", 1, T + 3);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "visit", 1, T + 3);
         JSONArray second = store.drain(first.getJSONObject(0).getLong("seq"));
         assertEquals(1, second.length());
         assertEquals(2, second.getJSONObject(0).getLong("seq"));
@@ -189,9 +190,9 @@ public class LockStoreTest {
     @Test
     public void syncKeepsUsageTheAppHasNotAcknowledged() throws Exception {
         LockStore.LockedApp tiktok = store.appFor("com.zhiliaoapp.musically");
-        store.spend(tiktok, "a", 3, T);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "a", 3, T);
         store.drain(0);
-        store.spend(tiktok, "a", 1, T + 1);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "a", 1, T + 1);
         // The app applied event 1 (5 - 3 = 2 left) but hasn't seen event 2 yet.
         rules.put("scrolls", 2);
         rules.put("ackSeq", 1);
@@ -210,15 +211,34 @@ public class LockStoreTest {
         rules.put("ackSeq", 99);
         store.sync(rules);
         LockStore.LockedApp tiktok = store.appFor("com.zhiliaoapp.musically");
-        store.spend(tiktok, "b", 1, T);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "b", 1, T);
         assertEquals(4, store.scrollsLeft());
     }
 
     @Test
     public void screenTimeIsChargedInSeconds() {
         LockStore.LockedApp minecraft = store.appFor("com.mojang.minecraftpe");
-        store.spend(minecraft, "m", 45.5, T);
+        store.spend(minecraft, LockStore.KIND_MINUTES, "m", 45.5, T);
         assertEquals(74.5, store.secondsLeft(), 1e-9);
+    }
+
+    @Test
+    public void youtubeKeepsShortsAndVideoTimeApartInOneVisit() throws Exception {
+        LockStore.LockedApp youtube = store.appFor("com.google.android.youtube");
+        assertEquals(LockStore.KIND_MIXED, youtube.kind);
+        store.spend(youtube, LockStore.KIND_SCROLLS, "y", 1, T);
+        store.spend(youtube, LockStore.KIND_MINUTES, "y", 30, T + 1);
+        store.spend(youtube, LockStore.KIND_SCROLLS, "y", 1, T + 2);
+        assertEquals(3, store.scrollsLeft());
+        assertEquals(90, store.secondsLeft(), 1e-9);
+        JSONArray events = store.drain(0);
+        assertEquals(3, events.length());
+        assertEquals("scrolls", events.getJSONObject(0).getString("kind"));
+        assertEquals("minutes", events.getJSONObject(1).getString("kind"));
+        assertEquals("youtube", events.getJSONObject(1).getString("appId"));
+        // "mixed" is how an app is charged, never a kind of usage.
+        store.spend(youtube, LockStore.KIND_MIXED, "y", 5, T + 3);
+        assertEquals(3, store.scrollsLeft());
     }
 
     @Test
@@ -239,7 +259,7 @@ public class LockStoreTest {
     @Test
     public void survivesARestart() throws Exception {
         LockStore.LockedApp tiktok = store.appFor("com.zhiliaoapp.musically");
-        store.spend(tiktok, "c", 2, T);
+        store.spend(tiktok, LockStore.KIND_SCROLLS, "c", 2, T);
         LockStore reloaded = new LockStore(context);
         assertEquals(3, reloaded.scrollsLeft());
         assertNotNull(reloaded.appFor("com.zhiliaoapp.musically"));

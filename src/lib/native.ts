@@ -93,7 +93,11 @@ export function scanPhoneApps(force = false): Promise<void> {
       const data = useStore.getState().data;
       const me = owner(data);
       // Only the phone's own person: someone else signed in here doesn't get this phone's list.
-      if (!me || data.sessionId !== me.id) return;
+      if (!me || data.sessionId !== me.id) {
+        // Nobody to save it for yet (say, before setup marks the phone as theirs): try again next time.
+        lastScan = 0;
+        return;
+      }
       const list = normalizePhoneApps(apps.map(({ pkg, name }) => ({ pkg, name })));
       if (JSON.stringify(list) !== JSON.stringify(me.phoneApps ?? [])) await act('updateProfile', { patch: { phoneApps: list } });
     } catch {

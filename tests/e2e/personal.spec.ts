@@ -268,6 +268,30 @@ test('settings list every app, with how each one is paid for', async ({ page }) 
   await expect(snapchat).toHaveAttribute('aria-pressed', 'true');
 });
 
+test('an app found on the phone can be locked on screen time', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  // Stand in for the Android app reporting what's installed on the phone.
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => localStorage.getItem(k)?.includes('"accounts"'));
+    if (!key) throw new Error('no saved data');
+    const data = JSON.parse(localStorage.getItem(key)!);
+    data.accounts[data.sessionId].phoneApps = [{ pkg: 'com.roblox.client', name: 'Roblox' }];
+    localStorage.setItem(key, JSON.stringify(data));
+  });
+  await page.goto('/#/settings');
+  await page.reload();
+  const roblox = page.getByRole('button', { name: 'Lock Roblox' });
+  await expect(roblox).toHaveAttribute('aria-pressed', 'false');
+  await roblox.click();
+  await expect(roblox).toHaveAttribute('aria-pressed', 'true');
+
+  await page.goto('/#/apps');
+  await page.getByRole('button', { name: 'Open Roblox' }).click();
+  await expect(page.getByRole('heading', { name: 'Roblox is locked' })).toBeVisible();
+  await expect(page.getByText('Your screen time is used up.')).toBeVisible();
+});
+
 test('signing in with the wrong password is refused', async ({ page }) => {
   await signUp(page, 'Sam', 'sam@example.com');
   await onboardPersonal(page, null);
