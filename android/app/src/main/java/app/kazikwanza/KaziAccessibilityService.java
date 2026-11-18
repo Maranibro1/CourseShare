@@ -165,7 +165,7 @@ public class KaziAccessibilityService extends AccessibilityService {
                 if (!ignoredPackages.contains(pkg)) onForeground(pkg);
                 break;
             case AccessibilityEvent.TYPE_VIEW_SCROLLED:
-                if (pkg.equals(foreground) && !isSideways(event)) onScroll(pkg);
+                if (pkg.equals(foreground) && !isSideways(event) && !isStill(event)) onScroll(pkg);
                 break;
             default:
                 break;
@@ -419,6 +419,16 @@ public class KaziAccessibilityService extends AccessibilityService {
     static boolean isSideways(AccessibilityEvent event) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false;
         return event.getScrollDeltaY() == 0 && event.getScrollDeltaX() != 0 && event.getScrollDeltaX() != -1;
+    }
+
+    /**
+     * A list that has just been laid out (a new screen such as Reels opening,
+     * more posts loading) reports a scroll of 0 in both directions. Nobody
+     * swiped, so it's free. Lists only report this from Android 9 on.
+     */
+    static boolean isStill(AccessibilityEvent event) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false;
+        return event.getScrollDeltaX() == 0 && event.getScrollDeltaY() == 0;
     }
 
     /** Keyboards open their own windows; they must not count as leaving the app. */

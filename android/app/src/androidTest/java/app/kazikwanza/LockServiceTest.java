@@ -249,6 +249,7 @@ public class LockServiceTest {
         swipeUp();
         assertEquals("feed posts", 8, store.scrollsLeft());
         tab("Reels");
+        assertEquals("opening Reels isn't a swipe", 8, store.scrollsLeft());
         swipeUp();
         swipeUp();
         assertEquals("reels", 6, store.scrollsLeft());
