@@ -16,6 +16,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
+# With DATABASE_URL set, the server creates its tables from the same SQL as the Supabase setup.
+COPY supabase/schema.sql ./supabase/schema.sql
 # Without DATABASE_URL, data is kept here; mount a volume to keep it across deploys.
 ENV DATA_DIR=/data
 RUN mkdir -p /data && chown node:node /data

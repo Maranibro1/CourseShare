@@ -25,6 +25,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - name: The Supabase function is built from the current code
+        run: |
+          npm run build:supabase
+          git diff --exit-code -- supabase/functions/kazi/index.ts || {
+            echo "::error::supabase/functions/kazi/index.ts is out of date. Run npm run build:supabase and commit it."
+            exit 1
+          }
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
@@ -46,15 +53,18 @@ jobs:
           java-version: 17
       - run: npm ci
 
-      # With the repository variable KAZI_SERVER_URL set (Settings > Secrets and
-      # variables > Actions > Variables), the app talks to that sync server, so
-      # verifiers, parents and messages work across phones. Without it, the app
-      # keeps everything on the phone.
+      # Repository variables (Settings > Secrets and variables > Actions > Variables)
+      # decide where accounts live, so verifiers, parents and messages work across phones:
+      #   KAZI_SUPABASE_URL + KAZI_SUPABASE_ANON_KEY: your Supabase project (see README), or
+      #   KAZI_SERVER_URL: a self-hosted Kazikwanza server.
+      # With neither, the app keeps everything on the phone.
       - name: Build the web app into Android
         env:
+          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY }}
           VITE_SYNC: ${{ vars.KAZI_SERVER_URL != '' && 'server' || '' }}
           VITE_API_URL: ${{ vars.KAZI_SERVER_URL }}
-          VITE_PUBLIC_URL: ${{ vars.KAZI_SERVER_URL }}
+          VITE_PUBLIC_URL: ${{ vars.KAZI_WEB_URL || vars.KAZI_SERVER_URL }}
         run: |
           npm run build
           npx cap sync android
@@ -110,6 +120,42 @@ jobs:
           else
             gh release create android-latest kazikwanza.apk --title "Kazikwanza for Android" --notes "$notes" --target "$GITHUB_SHA"
           fi
+
+  # The website, on GitHub Pages, once a Supabase project is set up (KAZI_SUPABASE_URL and
+  # KAZI_SUPABASE_ANON_KEY). Turn Pages on first: Settings > Pages > Source: GitHub Actions.
+  pages:
+    name: Website (GitHub Pages)
+    needs: web
+    if: vars.KAZI_SUPABASE_URL != '' && ((github.event_name == 'push' && github.ref_name == github.event.repository.default_branch) || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build the website
+        env:
+          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY }}
+          VITE_PUBLIC_URL: ${{ vars.KAZI_WEB_URL || format('{0}/', steps.pages.outputs.base_url) }}
+          VITE_APK_URL: https://github.com/${{ github.repository }}/releases/download/android-latest/kazikwanza.apk
+        run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   device:
     name: App lock on an Android emulator

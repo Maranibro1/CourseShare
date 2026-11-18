@@ -10,17 +10,65 @@ var APPS = [
   { id: "tiktok", name: "TikTok", kind: "scrolls", color: "#111827", packages: ["com.zhiliaoapp.musically", "com.ss.android.ugc.trill"] },
   { id: "instagram", name: "Instagram", kind: "scrolls", color: "#BE185D", packages: ["com.instagram.android", "com.instagram.lite"] },
   { id: "facebook", name: "Facebook", kind: "scrolls", color: "#1D4ED8", packages: ["com.facebook.katana", "com.facebook.lite"] },
-  { id: "youtube", name: "YouTube", kind: "scrolls", color: "#B91C1C", packages: ["com.google.android.youtube"] },
+  { id: "youtube", name: "YouTube", kind: "mixed", color: "#B91C1C", packages: ["com.google.android.youtube"] },
   { id: "x", name: "X", kind: "scrolls", color: "#18181B", packages: ["com.twitter.android", "com.twitter.android.lite"] },
   { id: "minecraft", name: "Minecraft", kind: "minutes", color: "#3F6212", packages: ["com.mojang.minecraftpe"] },
   { id: "netflix", name: "Netflix", kind: "minutes", color: "#7F1D1D", packages: ["com.netflix.mediaclient"] },
   { id: "snapchat", name: "Snapchat", kind: "minutes", color: "#A16207", packages: ["com.snapchat.android"] }
 ];
-var SCROLL_APPS = APPS.filter((a) => a.kind === "scrolls");
+var SCROLL_APPS = APPS.filter((a) => a.kind !== "minutes");
 var TIME_APPS = APPS.filter((a) => a.kind === "minutes");
 var DEFAULT_LOCKED = ["tiktok", "instagram", "facebook", "youtube", "minecraft", "netflix"];
-function getApp(id2) {
-  return APPS.find((a) => a.id === id2);
+var usesScrolls = (app) => app.kind !== "minutes";
+var usesMinutes = (app) => app.kind !== "scrolls";
+var FOUND_PREFIX = "pkg:";
+var MAX_PHONE_APPS = 300;
+var MAX_LOCKED_APPS = APPS.length + 200;
+var PACKAGE_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+var NEVER_LOCK = /* @__PURE__ */ new Set(["app.kazikwanza"]);
+var FOUND_COLORS = ["#0F766E", "#7C3AED", "#C2410C", "#0369A1", "#4D7C0F", "#BE123C", "#A16207", "#4338CA"];
+var COMMON_PARTS = /* @__PURE__ */ new Set(["com", "org", "net", "io", "co", "android", "app", "apps", "mobile", "client", "free", "lite", "google"]);
+function isValidPackage(pkg) {
+  return typeof pkg === "string" && pkg.length <= 150 && PACKAGE_RE.test(pkg) && !NEVER_LOCK.has(pkg);
+}
+function catalogAppFor(pkg) {
+  return APPS.find((a) => a.packages.includes(pkg));
+}
+function nameFromPackage(pkg) {
+  const parts = pkg.split(".").filter((p) => !COMMON_PARTS.has(p.toLowerCase()));
+  const word = parts[0] ?? pkg.split(".").pop() ?? pkg;
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+function colorFor(pkg) {
+  let h = 0;
+  for (let i = 0; i < pkg.length; i += 1) h = h * 31 + pkg.charCodeAt(i) >>> 0;
+  return FOUND_COLORS[h % FOUND_COLORS.length];
+}
+function foundApp(pkg, name) {
+  return { id: FOUND_PREFIX + pkg, name: name || nameFromPackage(pkg), kind: "minutes", color: colorFor(pkg), packages: [pkg], found: true };
+}
+function isValidAppId(id2) {
+  if (typeof id2 !== "string") return false;
+  if (APPS.some((a) => a.id === id2)) return true;
+  if (!id2.startsWith(FOUND_PREFIX)) return false;
+  const pkg = id2.slice(FOUND_PREFIX.length);
+  return isValidPackage(pkg) && !catalogAppFor(pkg);
+}
+function appFor(a, id2) {
+  const listed = APPS.find((x) => x.id === id2);
+  if (listed) return listed;
+  if (!isValidAppId(id2)) return void 0;
+  const pkg = id2.slice(FOUND_PREFIX.length);
+  return foundApp(pkg, a?.phoneApps?.find((p) => p.pkg === pkg)?.name);
+}
+function normalizePhoneApps(list) {
+  const out = /* @__PURE__ */ new Map();
+  for (const p of list) {
+    if (!p || !isValidPackage(p.pkg) || catalogAppFor(p.pkg)) continue;
+    const name = String(p.name ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || nameFromPackage(p.pkg);
+    out.set(p.pkg, { pkg: p.pkg, name });
+  }
+  return [...out.values()].sort((x, y) => x.name.localeCompare(y.name) || x.pkg.localeCompare(y.pkg)).slice(0, MAX_PHONE_APPS);
 }
 
 // src/lib/time.ts
@@ -252,11 +300,18 @@ function freeUnlockActive(a, now) {
   return a.unlockTime !== null && now >= clockToday(a.unlockTime, now);
 }
 function accessFor(a, appId2, now) {
-  const app = getApp(appId2);
+  const app = appFor(a, appId2);
   if (!app || !a.lockedApps.includes(appId2)) return "not-locked";
   if (freeUnlockActive(a, now)) return "free";
-  if (app.kind === "scrolls") return a.scrolls > 0 ? "balance" : "locked";
-  return remainingSeconds(a, now) > 0 ? "balance" : "locked";
+  const scrolls = a.scrolls > 0;
+  const time = remainingSeconds(a, now) > 0;
+  if (app.kind === "mixed") return scrolls || time ? "balance" : "locked";
+  if (app.kind === "scrolls") return scrolls ? "balance" : "locked";
+  return time ? "balance" : "locked";
+}
+function timeLabel(app) {
+  if (app.kind === "mixed") return `Watched ${app.name}`;
+  return app.found ? `Used ${app.name}` : `Played ${app.name}`;
 }
 function remainingSeconds(a, now) {
   const s = a.session;
@@ -265,12 +320,12 @@ function remainingSeconds(a, now) {
   return Math.max(0, a.screenSeconds - elapsed);
 }
 function startSession(data, accountId, appId2, now) {
-  const app = getApp(appId2);
-  if (!app || app.kind !== "minutes") throw new KaziError("Only timed apps use screen time");
+  const app = appFor(data.accounts[accountId], appId2);
+  if (!app || !usesMinutes(app)) throw new KaziError("Only timed apps use screen time");
   let next = data.accounts[accountId].session ? closeSession(data, accountId, now) : data;
   const a0 = account(next, accountId);
   const access = accessFor(a0, appId2, now);
-  if (access === "locked") throw new KaziError(`${app.name} is locked`);
+  if (access === "locked" || access === "balance" && remainingSeconds(a0, now) <= 0) throw new KaziError(`${app.name} is locked`);
   next = clone(next);
   account(next, accountId).session = { appId: appId2, startedAt: now, free: access !== "balance" };
   return next;
@@ -280,12 +335,12 @@ function closeSession(data, accountId, now) {
   const a = account(next, accountId);
   const s = a.session;
   if (!s) return data;
-  const app = getApp(s.appId);
+  const app = appFor(a, s.appId);
   if (!s.free) {
     const used = Math.min(a.screenSeconds, (now - s.startedAt) / 1e3);
     a.screenSeconds = Math.max(0, a.screenSeconds - used);
     if (used >= 30 && app) {
-      pushLedger(a, { at: now, label: `Played ${app.name}`, amount: -Math.max(1, Math.round(used / 60)), unit: "minutes" });
+      pushLedger(a, { at: now, label: timeLabel(app), amount: -Math.max(1, Math.round(used / 60)), unit: "minutes", appId: app.id });
     }
   }
   a.session = null;
@@ -295,14 +350,14 @@ function spendScroll(data, accountId, appId2, sessionKey, now) {
   const a0 = account(data, accountId);
   const access = accessFor(a0, appId2, now);
   if (access === "free" || access === "not-locked") return { data, result: "free" };
-  if (access === "locked") return { data, result: "locked" };
+  if (access === "locked" || a0.scrolls <= 0) return { data, result: "locked" };
   const next = clone(data);
   const a = account(next, accountId);
   a.scrolls -= 1;
-  const app = getApp(appId2);
+  const app = appFor(a, appId2);
   const existing = a.ledger.find((l) => l.id === sessionKey);
   if (existing) existing.amount -= 1;
-  else pushLedger(a, { at: now, label: `Scrolled ${app?.name ?? appId2}`, amount: -1, unit: "scrolls" }, sessionKey);
+  else pushLedger(a, { at: now, label: `Scrolled ${app?.name ?? appId2}`, amount: -1, unit: "scrolls", appId: appId2 }, sessionKey);
   const today = dayKey(now);
   if (a.scrolls === LOW_SCROLLS && a.lowScrollNoticeDay !== today) {
     a.lowScrollNoticeDay = today;
@@ -593,15 +648,16 @@ function emergencyUnlock(data, accountId, appId2, now) {
   const a0 = account(data, accountId);
   if (a0.mode === "child") throw new KaziError("Ask your parent for more time instead");
   if (emergencyLeft(a0, now) <= 0) throw new KaziError("No emergency unlocks left this week");
-  const app = getApp(appId2);
+  const app = appFor(a0, appId2);
   if (!app) throw new KaziError("Unknown app");
   const next = clone(data);
   const a = account(next, accountId);
   a.emergencyUses.push(now);
-  if (app.kind === "scrolls") {
+  if (usesScrolls(app)) {
     a.scrolls += EMERGENCY_SCROLLS;
     pushLedger(a, { at: now, label: `Emergency unlock \xB7 ${app.name}`, amount: EMERGENCY_SCROLLS, unit: "scrolls" });
-  } else {
+  }
+  if (usesMinutes(app)) {
     a.screenSeconds += EMERGENCY_MINUTES * 60;
     pushLedger(a, { at: now, label: `Emergency unlock \xB7 ${app.name}`, amount: EMERGENCY_MINUTES, unit: "minutes" });
   }
@@ -655,10 +711,20 @@ function setChildRules(data, parentId, childId, rules, now) {
   if (child.parentId !== parentId) throw new KaziError("This child is not linked to you");
   const next = clone(data);
   const c = account(next, childId);
-  c.lockedApps = rules.lockedApps.filter((id2) => getApp(id2));
+  c.lockedApps = [...new Set(rules.lockedApps.filter(isValidAppId))];
   c.unlockTime = rules.unlockTime;
   notify(next, childId, `${account(next, parentId).name} updated your rules`, "/child", now);
   return next;
+}
+function timeGift(app) {
+  if (!app) return { scrolls: TIME_GIFT.scrolls, minutes: 0 };
+  return { scrolls: usesScrolls(app) ? TIME_GIFT.scrolls : 0, minutes: usesMinutes(app) ? TIME_GIFT.minutes : 0 };
+}
+function giftLabel(gift) {
+  const parts = [];
+  if (gift.scrolls) parts.push(`${gift.scrolls} scrolls`);
+  if (gift.minutes) parts.push(`${gift.minutes} min of screen time`);
+  return parts.join(" and ");
 }
 function askForTime(data, childId, appId2, now) {
   const child = account(data, childId);
@@ -666,7 +732,7 @@ function askForTime(data, childId, appId2, now) {
   if (data.timeRequests.some((r) => r.childId === childId && r.status === "open")) {
     throw new KaziError("You already asked. Wait for your parent to answer.");
   }
-  const app = getApp(appId2);
+  const app = appFor(child, appId2);
   const next = clone(data);
   next.timeRequests.push({ id: newId("r"), childId, parentId: child.parentId, appId: appId2, at: now, status: "open" });
   notify(next, child.parentId, `${child.name} asked for more time on ${app?.name ?? "an app"}`, "/family", now);
@@ -681,17 +747,17 @@ function answerTimeRequest(data, requestId, parentId, grant, now) {
   r.status = grant ? "granted" : "declined";
   const child = account(next, r.childId);
   const parent = account(next, parentId);
-  const app = getApp(r.appId);
+  const gift = timeGift(appFor(child, r.appId));
   if (grant) {
-    if (app?.kind === "minutes") {
-      child.screenSeconds += TIME_GIFT.minutes * 60;
-      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: TIME_GIFT.minutes, unit: "minutes" });
-      notify(next, child.id, `${parent.name} gave you ${TIME_GIFT.minutes} min of screen time`, "/child", now);
-    } else {
-      child.scrolls += TIME_GIFT.scrolls;
-      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: TIME_GIFT.scrolls, unit: "scrolls" });
-      notify(next, child.id, `${parent.name} gave you ${TIME_GIFT.scrolls} scrolls`, "/child", now);
+    if (gift.minutes) {
+      child.screenSeconds += gift.minutes * 60;
+      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: gift.minutes, unit: "minutes" });
     }
+    if (gift.scrolls) {
+      child.scrolls += gift.scrolls;
+      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: gift.scrolls, unit: "scrolls" });
+    }
+    notify(next, child.id, `${parent.name} gave you ${giftLabel(gift)}`, "/child", now);
   } else {
     notify(next, child.id, `${parent.name} said not now. Finish a task to earn more.`, "/child", now);
   }
@@ -714,16 +780,16 @@ function applyNativeEvents(data, accountId, deviceId, events, now) {
   const a = account(next, accountId);
   const today = dayKey(now);
   for (const e of fresh) {
-    const app = getApp(e.appId);
+    const app = appFor(a, e.appId);
     const name = app?.name ?? e.appId;
-    const ledgerId = `n_${deviceId}_${e.session}`;
-    const line = a.ledger.find((l) => l.id === ledgerId);
+    const ledgerId = `n_${deviceId}_${e.session}${e.kind === "minutes" ? "_t" : ""}`;
+    const line = a.ledger.find((l) => l.id === ledgerId && l.unit === e.kind);
     if (e.kind === "scrolls") {
       const n = Math.max(0, Math.round(e.amount));
       const before = a.scrolls;
       a.scrolls = Math.max(0, before - n);
       if (line) line.amount -= n;
-      else pushLedger(a, { at: e.at, label: `Scrolled ${name}`, amount: -n, unit: "scrolls" }, ledgerId);
+      else pushLedger(a, { at: e.at, label: `Scrolled ${name}`, amount: -n, unit: "scrolls", appId: e.appId }, ledgerId);
       if (before > LOW_SCROLLS && a.scrolls <= LOW_SCROLLS && a.scrolls > 0 && a.lowScrollNoticeDay !== today) {
         a.lowScrollNoticeDay = today;
         notify(next, accountId, `You have ${a.scrolls} scrolls left`, "/wallet", now);
@@ -735,7 +801,8 @@ function applyNativeEvents(data, accountId, deviceId, events, now) {
         line.seconds = (line.seconds ?? 0) + secs;
         line.amount = -Math.round(line.seconds / 60);
       } else {
-        pushLedger(a, { at: e.at, label: `Played ${name}`, amount: -Math.round(secs / 60), unit: "minutes", seconds: secs }, ledgerId);
+        const label = app ? timeLabel(app) : `Played ${name}`;
+        pushLedger(a, { at: e.at, label, amount: -Math.round(secs / 60), unit: "minutes", seconds: secs, appId: e.appId }, ledgerId);
       }
     }
     a.nativeSeqs = { ...a.nativeSeqs, [deviceId]: e.seq };
@@ -829,13 +896,23 @@ function clock(v) {
   return s;
 }
 function appId(v) {
-  const s = id(v);
-  if (!getApp(s)) bad();
+  const s = str(v, 160);
+  if (!isValidAppId(s)) bad();
   return s;
 }
 function appIds(v) {
-  if (!Array.isArray(v) || v.length > APPS.length) bad();
+  if (!Array.isArray(v) || v.length > MAX_LOCKED_APPS) bad();
   return [...new Set(v.map(appId))];
+}
+function phoneApps(v) {
+  if (!Array.isArray(v) || v.length > MAX_PHONE_APPS * 2) bad();
+  return normalizePhoneApps(
+    v.map((x) => {
+      const o = x;
+      if (!o || typeof o !== "object") bad();
+      return { pkg: str(o.pkg, 150), name: str(o.name, 200) };
+    })
+  );
 }
 var REWARD_KINDS = ["scrolls", "minutes"];
 var REPEATS = ["never", "daily", "weekdays"];
@@ -895,6 +972,9 @@ function updateProfile(data, actor, args) {
       case "lockedApps":
         if (linkedChild) throw new KaziError("Your parent sets which apps are locked");
         out.lockedApps = appIds(value);
+        break;
+      case "phoneApps":
+        out.phoneApps = phoneApps(value);
         break;
       case "unlockTime":
         if (linkedChild) throw new KaziError("Your parent sets your unlock time");
@@ -1032,6 +1112,7 @@ function publicAccount(a, viewerEmail = "") {
     session: null,
     nativeSeqs: {},
     notifyKey: void 0,
+    phoneApps: void 0,
     unlockNoticeDay: null,
     lowScrollNoticeDay: null
   };
