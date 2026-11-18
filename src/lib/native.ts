@@ -4,7 +4,7 @@ import { App as CapApp } from '@capacitor/app';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { normalizePhoneApps } from './apps';
 import { applyNativeEvents, nativeRules, type NativeRules, type NativeUsageEvent } from './logic';
-import { deviceId, deviceOwner } from './device';
+import { deviceId, deviceOwner, setDeviceOwner } from './device';
 import { SERVER_MODE, act, useStore } from './store';
 import type { Account, AppData } from './types';
 
@@ -58,10 +58,26 @@ export function useLockStatus(): { accessibility: boolean; usage: boolean } | nu
  * else is signed in on this phone the last rules simply stay in force.
  */
 function owner(data: AppData): Account | undefined {
+  claimPhone(data);
   const id = deviceOwner();
   if (!id) return undefined;
   if (SERVER_MODE && data.sessionId !== id) return undefined;
   return data.accounts[id];
+}
+
+/**
+ * The phone follows whoever is signed in on it, so their scrolls and screen
+ * time are the ones the lock checks, and their swipes land in their wallet.
+ * The one exception: a parent signing in on their child's phone leaves the
+ * child's rules in force.
+ */
+export function claimPhone(data: AppData): void {
+  if (!isNativeAndroid) return;
+  const me = data.sessionId ? data.accounts[data.sessionId] : undefined;
+  if (!me || deviceOwner() === me.id) return;
+  const current = deviceOwner() ? data.accounts[deviceOwner()!] : undefined;
+  if (current && current.parentId === me.id) return;
+  setDeviceOwner(me.id);
 }
 
 /* ───────── Apps installed on this phone ───────── */

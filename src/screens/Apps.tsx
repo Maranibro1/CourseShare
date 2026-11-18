@@ -42,6 +42,8 @@ async function launch(app: LockableApp, navigate: (to: string, opts?: { replace?
     navigate(`/app/${app.id}`, { replace });
     return true;
   }
+  // Hand the phone's lock the latest balance first, so scrolls you just earned count straight away.
+  await pumpNative();
   const { opened } = await KaziLock.openApp({ packages: app.packages }).catch(() => ({ opened: false }));
   if (!opened) toast(`${app.name} isn't installed on this phone`);
   return opened;

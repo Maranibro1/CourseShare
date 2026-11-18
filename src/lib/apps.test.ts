@@ -4,6 +4,9 @@ import { applyAction } from './actions';
 import { APPS, appFor, appsFor, isValidAppId, lockedNames, normalizePhoneApps } from './apps';
 import {
   accessFor,
+  addChildTask,
+  adjustChildBalance,
+  deleteTask,
   answerTimeRequest,
   applyNativeEvents,
   askForTime,
@@ -207,5 +210,42 @@ describe('YouTube: Shorts cost scrolls, videos cost screen time', () => {
     expect(a.screenSeconds).toBeGreaterThan(0);
     expect(lockedNames(a, 'scrolls')).toContain('YouTube');
     expect(lockedNames(a, 'minutes')).toContain('YouTube');
+  });
+});
+
+describe('a parent runs their child\'s account', () => {
+  function family() {
+    let data: AppData = emptyData();
+    const mum = createAccount(data, { name: 'Mum', email: 'mum@example.com', passwordHash: 'h' }, T0);
+    data = mum.data;
+    const leo = createAccount(data, { name: 'Leo', email: 'leo@example.com', passwordHash: 'h' }, T0);
+    data = updateAccount(leo.data, mum.id, { mode: 'parent', onboarded: true });
+    data = createLinkCode(data, mum.id, T0, () => 0.1);
+    data = joinFamily(data, leo.id, data.linkCodes[0].code, T0);
+    return { data, mum: mum.id, leo: leo.id };
+  }
+
+  it('gives and takes scrolls and screen time, never below 0', () => {
+    let { data, mum, leo } = family();
+    data = adjustChildBalance(data, mum, leo, 'scrolls', 30, T0);
+    data = adjustChildBalance(data, mum, leo, 'minutes', 15, T0);
+    expect(data.accounts[leo].scrolls).toBe(30);
+    expect(data.accounts[leo].screenSeconds).toBe(900);
+    data = adjustChildBalance(data, mum, leo, 'scrolls', -50, T0);
+    expect(data.accounts[leo].scrolls).toBe(0);
+    expect(data.accounts[leo].ledger[0]).toMatchObject({ label: 'Taken by Mum', amount: -30, unit: 'scrolls' });
+    expect(data.notifications.some((n) => n.accountId === leo && n.text === 'Mum gave you 15 min of screen time')).toBe(true);
+    expect(() => adjustChildBalance(data, leo, mum, 'scrolls', 10, T0)).toThrow(/not linked/);
+    expect(() => adjustChildBalance(data, mum, leo, 'scrolls', 5000, T0)).toThrow();
+    expect(() => applyAction(data, leo, 'adjustChildBalance', { childId: leo, kind: 'scrolls', amount: 100 }, T0)).toThrow();
+    expect(applyAction(data, mum, 'adjustChildBalance', { childId: leo, kind: 'scrolls', amount: 5 }, T0).data.accounts[leo].scrolls).toBe(5);
+  });
+
+  it("deletes any of the child's tasks, but nobody else's", () => {
+    let { data, mum, leo } = family();
+    const own = addChildTask(data, mum, leo, { title: 'Dishes', rewardKind: 'scrolls', amount: 20, repeat: 'never', dueTime: null }, T0);
+    data = own.data;
+    expect(deleteTask(data, own.id, mum).tasks[own.id]).toBeUndefined();
+    expect(() => deleteTask(data, own.id, leo)).toThrow();
   });
 });

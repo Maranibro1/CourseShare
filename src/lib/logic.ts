@@ -454,7 +454,9 @@ export function editTask(data: AppData, taskId: string, editorId: string, input:
 
 export function deleteTask(data: AppData, taskId: string, actorId: string): AppData {
   const t = task(data, taskId);
-  if (t.createdBy !== actorId) throw new KaziError('Only the person who made this task can delete it');
+  // A parent can also remove any of their child's tasks.
+  const parentOfOwner = data.accounts[t.ownerId]?.parentId === actorId;
+  if (t.createdBy !== actorId && !parentOfOwner) throw new KaziError('Only the person who made this task can delete it');
   const next = clone(data);
   delete next.tasks[taskId];
   return next;
@@ -652,7 +654,8 @@ export function weekStats(data: AppData, ownerId: string, now: number): WeekStat
   const from = startOfWeek(now);
   const stats: WeekStats = { scrollsEarned: 0, scrollsUsed: 0, minutesEarned: 0, minutesUsed: 0, tasksDone: 0, streak: 0 };
   for (const l of a.ledger) {
-    if (l.at < from) continue;
+    // A parent taking some away isn't the child using them.
+    if (l.at < from || l.label.startsWith('Taken by ')) continue;
     if (l.unit === 'scrolls') {
       if (l.amount > 0) stats.scrollsEarned += l.amount;
       else stats.scrollsUsed -= l.amount;
@@ -821,6 +824,39 @@ export function shortGift(gift: { scrolls: number; minutes: number }): string {
   if (gift.scrolls) parts.push(`${gift.scrolls} scrolls`);
   if (gift.minutes) parts.push(`${gift.minutes} min`);
   return parts.join(' + ');
+}
+
+/** Most a parent can give or take in one go. */
+export const MAX_ADJUST = { scrolls: 1000, minutes: 600 } as const;
+
+/**
+ * A parent gives (positive amount) or takes away (negative) scrolls or
+ * screen-time minutes on their child's account. Balances never go below 0.
+ */
+export function adjustChildBalance(data: AppData, parentId: string, childId: string, kind: RewardKind, amount: number, now: number): AppData {
+  const child0 = account(data, childId);
+  if (child0.parentId !== parentId) throw new KaziError('This child is not linked to you');
+  if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > MAX_ADJUST[kind]) {
+    throw new KaziError(`Choose between 1 and ${MAX_ADJUST[kind]} ${kind === 'scrolls' ? 'scrolls' : 'minutes'}`);
+  }
+  const next = clone(data);
+  const child = account(next, childId);
+  const parent = account(next, parentId);
+  let change: number;
+  if (kind === 'scrolls') {
+    const before = child.scrolls;
+    child.scrolls = Math.max(0, before + amount);
+    change = child.scrolls - before;
+  } else {
+    const before = child.screenSeconds;
+    child.screenSeconds = Math.max(0, before + amount * 60);
+    change = Math.round((child.screenSeconds - before) / 60);
+  }
+  if (change === 0) return data;
+  const what = kind === 'scrolls' ? `${Math.abs(change)} scrolls` : `${Math.abs(change)} min of screen time`;
+  pushLedger(child, { at: now, label: change > 0 ? `Gift from ${parent.name}` : `Taken by ${parent.name}`, amount: change, unit: kind });
+  notify(next, childId, change > 0 ? `${parent.name} gave you ${what}` : `${parent.name} took away ${what}`, '/child', now);
+  return next;
 }
 
 export function askForTime(data: AppData, childId: string, appId: string, now: number): AppData {

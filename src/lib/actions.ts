@@ -8,6 +8,7 @@ import { MAX_LOCKED_APPS, MAX_PHONE_APPS, isValidAppId, normalizePhoneApps } fro
 import {
   KaziError,
   addChildTask,
+  adjustChildBalance,
   addTask,
   answerTimeRequest,
   applyNativeEvents,
@@ -258,6 +259,7 @@ export const ACTIONS = {
     return setChildRules(d, actor, id(a.childId), { lockedApps: appIds(rules.lockedApps), unlockTime: clock(rules.unlockTime) }, now);
   },
   unlinkChild: (d, actor, a) => unlinkChild(d, actor, id(a.childId)),
+  adjustChildBalance: (d, actor, a, now) => adjustChildBalance(d, actor, id(a.childId), oneOf(a.kind, REWARD_KINDS), int(a.amount), now),
 
   // The built-in demo of locked apps (web only; the Android app reports real usage instead).
   spendScroll: (d, actor, a, now) => {

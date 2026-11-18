@@ -55,8 +55,20 @@ test('parent links a child, sets a task and approves the photo', async ({ page }
   await expect(page.getByRole('img', { name: "Leo's photo of Maths homework" })).toBeVisible();
   await page.getByRole('button', { name: 'Approve' }).click();
   await expect(page.getByRole('heading', { name: 'Needs approval' })).toHaveCount(0);
-  await page.getByRole('link', { name: /See week/ }).click();
-  await expect(page.getByRole('heading', { name: "Leo's week" })).toBeVisible();
+  await page.getByRole('link', { name: /Open account/ }).click();
+  await expect(page.getByRole('heading', { name: "Leo's account" })).toBeVisible();
+  await expect(page.getByTestId('child-scrolls')).toHaveText('50');
+  await expect(page.getByRole('button', { name: 'Delete Maths homework' })).toBeVisible();
+  // The parent tops up Leo's scrolls from his account page.
+  await page.getByRole('button', { name: 'Give', exact: true }).click();
+  await page.getByRole('button', { name: '20 scrolls', exact: true }).click();
+  await page.getByRole('button', { name: 'Give 20 scrolls' }).click();
+  await expect(page.getByTestId('child-scrolls')).toHaveText('70');
+  await page.getByRole('button', { name: 'Take away' }).click();
+  await page.getByRole('button', { name: '10 scrolls', exact: true }).click();
+  await page.getByRole('button', { name: 'Take away 10 scrolls' }).click();
+  await expect(page.getByTestId('child-scrolls')).toHaveText('60');
+  await expect(page.getByText('Taken by Achieng')).toBeVisible();
   await page.getByRole('link', { name: "Edit Leo's rules" }).click();
   await page.getByText('No free unlock, only earn scrolls').click();
   await page.getByRole('button', { name: 'Save rules' }).click();
@@ -67,7 +79,16 @@ test('parent links a child, sets a task and approves the photo', async ({ page }
   await expect(page.getByText('+50')).toBeVisible();
   await expect(page.getByText('Achieng approved your maths homework.')).toBeVisible();
   await page.getByRole('button', { name: 'Done' }).click();
-  await expect(page.getByTestId('scroll-balance')).toHaveText('50');
+  await expect(page.getByTestId('scroll-balance')).toHaveText('60');
+
+  // With scrolls in his wallet, Leo gets into Instagram, and each swipe comes off the wallet.
+  await page.getByRole('link', { name: 'Open your apps' }).click();
+  await page.getByRole('button', { name: 'Open Instagram' }).click();
+  await expect(page.getByTestId('scroll-meter')).toHaveText('60 scrolls left');
+  await page.getByTestId('feed').evaluate((el) => el.scrollTo({ top: el.clientHeight }));
+  await expect(page.getByTestId('scroll-meter')).toHaveText('59 scrolls left');
+  await page.goto('/#/child');
+  await expect(page.getByTestId('scroll-balance')).toHaveText('59');
 
   // A child with no scrolls left asks the parent for more time instead of an emergency unlock.
   await page.goto('/#/locked/minecraft');

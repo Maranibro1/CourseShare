@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import QRCode from 'qrcode';
 import { ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
 import { Avatar, BackButton, HeaderActions, NavScreen, Sheet, StoredPhoto, useBack } from '../components/ui';
-import { appFor, lockedAppsOf } from '../lib/apps';
+import { appFor, lockedAppsOf, usesMinutes } from '../lib/apps';
 import { AppList } from '../components/AppList';
 import {
   LINK_CODE_TTL_MS,
@@ -11,6 +11,7 @@ import {
   childrenOf,
   dailyCompletions,
   minutesLeft,
+  minutesUsedToday,
   requestsFor,
   rewardLabel,
   shortGift,
@@ -19,7 +20,7 @@ import {
   weekStats,
 } from '../lib/logic';
 import { act, toast, useAccount, useData, useNow } from '../lib/store';
-import { formatClock } from '../lib/time';
+import { formatClock, timeAgo } from '../lib/time';
 import type { Account, Repeat, RewardKind } from '../lib/types';
 import { unlockLine, useUnseenReward, TaskRow } from './Home';
 import { UnlockTimePicker } from './Onboarding';
@@ -65,6 +66,20 @@ export function ParentHome() {
         </div>
       )}
 
+      <Link
+        to="/home"
+        className="card"
+        style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', textDecoration: 'none', color: '#18181B', borderRadius: 14 }}
+      >
+        <span className="stack" style={{ flexGrow: 1, gap: 2 }}>
+          <span>Your own tasks and apps</span>
+          <span className="small">
+            {me.scrolls} scrolls · {minutesLeft(me, now)} min · lock your own apps in Settings
+          </span>
+        </span>
+        <ChevronIcon size={18} color="#52525B" />
+      </Link>
+
       {kids.length === 0 && (
         <div className="stack-12">
           <div className="empty-state">
@@ -87,7 +102,7 @@ export function ParentHome() {
                 {kid.name}
               </span>
               <Link to={`/family/child/${kid.id}`} style={{ fontSize: 14, textDecoration: 'none' }}>
-                {done} of {tasks.length} tasks done · See week
+                {done} of {tasks.length} tasks done · {kid.scrolls} scrolls · {minutesLeft(kid, now)} min · Open account
               </Link>
             </div>
             <div className="stack" style={{ alignItems: 'flex-end' }}>
@@ -423,10 +438,65 @@ function useChild(): Account | undefined {
   return kid && kid.parentId === me.id ? kid : undefined;
 }
 
+const GIVE_PRESETS = { scrolls: [10, 20, 50, 100], minutes: [5, 15, 30, 60] } as const;
+
+/** Sheet where a parent gives or takes away scrolls or screen time. */
+function AdjustSheet({ kid, mode, onClose }: { kid: Account; mode: 'give' | 'take' | null; onClose: () => void }) {
+  const [kind, setKind] = useState<RewardKind>('scrolls');
+  const [amount, setAmount] = useState<number>(GIVE_PRESETS.scrolls[1]);
+  if (!mode) return null;
+  const give = mode === 'give';
+  const unit = kind === 'scrolls' ? 'scrolls' : 'min';
+  return (
+    <Sheet open onClose={onClose} title={give ? `Give ${kid.name}…` : `Take from ${kid.name}…`}>
+      <div className="segmented">
+        {(['scrolls', 'minutes'] as const).map((k) => (
+          <button
+            key={k}
+            className={kind === k ? 'selected' : undefined}
+            aria-pressed={kind === k}
+            onClick={() => {
+              setKind(k);
+              setAmount(GIVE_PRESETS[k][1]);
+            }}
+          >
+            {k === 'scrolls' ? 'Scrolls' : 'Screen time'}
+          </button>
+        ))}
+      </div>
+      <div className="chips">
+        {GIVE_PRESETS[kind].map((n) => (
+          <button key={n} className={`chip${amount === n ? ' selected' : ''}`} aria-pressed={amount === n} onClick={() => setAmount(n)}>
+            {n} {unit}
+          </button>
+        ))}
+      </div>
+      <button
+        className="btn btn-primary"
+        onClick={async () => {
+          if ((await act('adjustChildBalance', { childId: kid.id, kind, amount: give ? amount : -amount })).ok) {
+            toast(give ? `Gave ${kid.name} ${amount} ${unit}` : `Took ${amount} ${unit} from ${kid.name}`);
+            onClose();
+          }
+        }}
+      >
+        {give ? `Give ${amount} ${unit}` : `Take away ${amount} ${unit}`}
+      </button>
+    </Sheet>
+  );
+}
+
+/**
+ * A parent's view of their child's account, the way the child sees their own:
+ * balances (which the parent can top up or take away), today's tasks, screen
+ * time used per app, the history, the week, and the rules.
+ */
 export function ChildWeek() {
   const data = useData();
+  const me = useAccount();
   const kid = useChild();
-  const now = useNow(30_000);
+  const now = useNow(5_000);
+  const [adjust, setAdjust] = useState<'give' | 'take' | null>(null);
   if (!kid) return <MissingChild />;
   const stats = weekStats(data, kid.id, now);
   const days = dailyCompletions(data, kid.id, now);
@@ -434,27 +504,123 @@ export function ChildWeek() {
   const locked = lockedAppsOf(kid)
     .map((a) => a.name)
     .join(', ');
+  const tasks = todaysTasks(data, kid.id, now);
+  const used = minutesUsedToday(kid, now);
+  const timed = lockedAppsOf(kid).filter(usesMinutes);
+  const history = kid.ledger.slice(0, 15);
 
   return (
     <main className="screen">
       <BackButton fallback="/family" />
-      <h1 className="h1">{kid.name}'s week</h1>
-      <div className="grid-3">
-        <div className="stat">
-          <b>{stats.tasksDone}</b>
-          <span className="small">Tasks done</span>
-        </div>
-        <div className="stat">
-          <b>{stats.scrollsEarned}</b>
-          <span className="small">Scrolls earned</span>
-        </div>
-        <div className="stat">
-          <b>{stats.scrollsUsed}</b>
-          <span className="small">Scrolls used</span>
-        </div>
+      <div className="topbar">
+        <h1 className="h1">{kid.name}'s account</h1>
+        <Link to={`/messages/${kid.id}`} className="link-btn strong">
+          Message
+        </Link>
       </div>
+
+      <div className="card-green">
+        <div className="grid-2" style={{ gap: 12 }}>
+          <div className="stack-6">
+            <span className="sub">Scrolls</span>
+            <span className="huge-number" data-testid="child-scrolls">
+              {kid.scrolls}
+            </span>
+          </div>
+          <div className="stack-6">
+            <span className="sub">Screen time</span>
+            <span className="huge-number" data-testid="child-minutes">
+              {minutesLeft(kid, now)}
+              <small> min</small>
+            </span>
+          </div>
+        </div>
+        <span className="sub" style={{ fontSize: 13 }}>
+          {unlockLine(kid, now).replace('All apps unlock', 'Apps unlock')}
+        </span>
+      </div>
+      <div className="grid-2">
+        <button className="btn btn-primary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => setAdjust('give')}>
+          Give
+        </button>
+        <button className="btn btn-secondary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => setAdjust('take')}>
+          Take away
+        </button>
+      </div>
+
+      <div className="stack">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingBottom: 4 }}>
+          <h2 className="h2">Today's tasks</h2>
+          <Link to={`/family/task/new?child=${kid.id}`} className="link-btn strong" style={{ fontSize: 14, height: 'auto' }}>
+            + Add task
+          </Link>
+        </div>
+        {tasks.length === 0 ? (
+          <div className="empty-state">No tasks today. Add one so {kid.name} can earn scrolls or screen time.</div>
+        ) : (
+          tasks.map((t) => (
+            <div className="row" key={t.id}>
+              <div className="stack" style={{ gap: 2, minWidth: 0 }}>
+                <span>{t.title}</span>
+                <span className="small">
+                  {t.status === 'done' ? 'Done' : t.status === 'pending' ? 'Waiting for you' : t.status === 'redo' ? 'Redo' : 'Not done yet'} ·{' '}
+                  {rewardLabel(t.reward.kind, t.reward.amount)}
+                  {t.reward.kind === 'scrolls' ? ' scrolls' : ''}
+                </span>
+              </div>
+              {t.status === 'pending' && t.verifierId === me.id ? (
+                <Link to={`/family/approve/${t.id}`} className="link-btn strong" style={{ fontSize: 14 }}>
+                  Check
+                </Link>
+              ) : (
+                <button
+                  className="link-btn danger"
+                  style={{ fontSize: 14 }}
+                  aria-label={`Delete ${t.title}`}
+                  onClick={async () => {
+                    if (window.confirm(`Delete "${t.title}"?`) && (await act('deleteTask', { taskId: t.id })).ok) toast('Task deleted');
+                  }}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="stack">
+        <h2 className="h2" style={{ marginBottom: 4 }}>
+          Screen time used today
+        </h2>
+        {timed.length === 0 ? (
+          <div className="empty-state">No timed apps are locked.</div>
+        ) : (
+          timed.map((a) => (
+            <div className="row" key={a.id}>
+              <span>{a.name}</span>
+              <span className="muted">{used[a.id] ?? 0} min</span>
+            </div>
+          ))
+        )}
+      </div>
+
       <div className="stack-12">
-        <h2 className="h2">Tasks done per day</h2>
+        <h2 className="h2">This week</h2>
+        <div className="grid-3">
+          <div className="stat">
+            <b>{stats.tasksDone}</b>
+            <span className="small">Tasks done</span>
+          </div>
+          <div className="stat">
+            <b>{stats.scrollsEarned}</b>
+            <span className="small">Scrolls earned</span>
+          </div>
+          <div className="stat">
+            <b>{stats.scrollsUsed}</b>
+            <span className="small">Scrolls used</span>
+          </div>
+        </div>
         <div className="bars" role="img" aria-label={days.map((d) => `${d.label}: ${d.count}`).join(', ')}>
           {days.map((d, i) => (
             <div key={i} className={i === days.length - 1 ? 'today' : undefined} style={{ height: `${(d.count / max) * 100}%` }} title={`${d.count} done`} />
@@ -466,6 +632,28 @@ export function ChildWeek() {
           ))}
         </div>
       </div>
+
+      <div className="stack">
+        <h2 className="h2" style={{ marginBottom: 4 }}>
+          History
+        </h2>
+        {history.length === 0 ? (
+          <div className="empty-state">Nothing yet.</div>
+        ) : (
+          history.map((l) => (
+            <div className="row" key={l.id}>
+              <div className="stack" style={{ gap: 2, minWidth: 0 }}>
+                <span>{l.label}</span>
+                <span className="small">{timeAgo(l.at, now)}</span>
+              </div>
+              <span className="strong" style={{ color: l.amount > 0 ? '#15803D' : '#52525B', whiteSpace: 'nowrap' }}>
+                {rewardLabel(l.unit, l.amount)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
       <div className="stack">
         <h2 className="h2" style={{ marginBottom: 4 }}>
           {kid.name}'s rules
@@ -479,10 +667,10 @@ export function ChildWeek() {
           <span className="value">{kid.unlockTime ? formatClock(kid.unlockTime) : 'Off'}</span>
         </div>
       </div>
-      <div className="spacer" />
       <Link to={`/family/child/${kid.id}/rules`} className="btn btn-secondary">
         Edit {kid.name}'s rules
       </Link>
+      <AdjustSheet key={adjust ?? 'none'} kid={kid} mode={adjust} onClose={() => setAdjust(null)} />
     </main>
   );
 }

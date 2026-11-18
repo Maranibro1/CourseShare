@@ -502,7 +502,8 @@ function editTask(data, taskId, editorId, input) {
 }
 function deleteTask(data, taskId, actorId) {
   const t = task(data, taskId);
-  if (t.createdBy !== actorId) throw new KaziError("Only the person who made this task can delete it");
+  const parentOfOwner = data.accounts[t.ownerId]?.parentId === actorId;
+  if (t.createdBy !== actorId && !parentOfOwner) throw new KaziError("Only the person who made this task can delete it");
   const next = clone(data);
   delete next.tasks[taskId];
   return next;
@@ -725,6 +726,32 @@ function giftLabel(gift) {
   if (gift.scrolls) parts.push(`${gift.scrolls} scrolls`);
   if (gift.minutes) parts.push(`${gift.minutes} min of screen time`);
   return parts.join(" and ");
+}
+var MAX_ADJUST = { scrolls: 1e3, minutes: 600 };
+function adjustChildBalance(data, parentId, childId, kind, amount, now) {
+  const child0 = account(data, childId);
+  if (child0.parentId !== parentId) throw new KaziError("This child is not linked to you");
+  if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > MAX_ADJUST[kind]) {
+    throw new KaziError(`Choose between 1 and ${MAX_ADJUST[kind]} ${kind === "scrolls" ? "scrolls" : "minutes"}`);
+  }
+  const next = clone(data);
+  const child = account(next, childId);
+  const parent = account(next, parentId);
+  let change;
+  if (kind === "scrolls") {
+    const before = child.scrolls;
+    child.scrolls = Math.max(0, before + amount);
+    change = child.scrolls - before;
+  } else {
+    const before = child.screenSeconds;
+    child.screenSeconds = Math.max(0, before + amount * 60);
+    change = Math.round((child.screenSeconds - before) / 60);
+  }
+  if (change === 0) return data;
+  const what = kind === "scrolls" ? `${Math.abs(change)} scrolls` : `${Math.abs(change)} min of screen time`;
+  pushLedger(child, { at: now, label: change > 0 ? `Gift from ${parent.name}` : `Taken by ${parent.name}`, amount: change, unit: kind });
+  notify(next, childId, change > 0 ? `${parent.name} gave you ${what}` : `${parent.name} took away ${what}`, "/child", now);
+  return next;
 }
 function askForTime(data, childId, appId2, now) {
   const child = account(data, childId);
@@ -1048,6 +1075,7 @@ var ACTIONS = {
     return setChildRules(d, actor, id(a.childId), { lockedApps: appIds(rules.lockedApps), unlockTime: clock(rules.unlockTime) }, now);
   },
   unlinkChild: (d, actor, a) => unlinkChild(d, actor, id(a.childId)),
+  adjustChildBalance: (d, actor, a, now) => adjustChildBalance(d, actor, id(a.childId), oneOf(a.kind, REWARD_KINDS), int(a.amount), now),
   // The built-in demo of locked apps (web only; the Android app reports real usage instead).
   spendScroll: (d, actor, a, now) => {
     const r = spendScroll(d, actor, appId(a.appId), id(a.sessionKey), now);
