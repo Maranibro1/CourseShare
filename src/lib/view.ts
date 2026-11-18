@@ -26,6 +26,7 @@ export function publicAccount(a: Account, viewerEmail = ''): Account {
     emergencyUses: [],
     session: null,
     nativeSeqs: {},
+    notifyKey: undefined,
     unlockNoticeDay: null,
     lowScrollNoticeDay: null,
   };

@@ -62,6 +62,8 @@ export interface Account {
   nativeSeqs?: Record<string, number>;
   /** IANA zone the account's days and unlock time are counted in. */
   timeZone?: string;
+  /** Secret part of this account's live-update channel name. Only ever sent to the account itself. */
+  notifyKey?: string;
 }
 
 export interface Task {

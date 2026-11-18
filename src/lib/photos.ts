@@ -1,5 +1,5 @@
 import { createStore, del, get, set } from 'idb-keyval';
-import { API_BASE, SERVER_MODE, api } from './store';
+import { SERVER_MODE, api, apiHeaders, apiUrl } from './store';
 
 /*
  * Proof photos. On their own, they're kept in IndexedDB (not in the main
@@ -20,7 +20,7 @@ function dataUrlToBlob(dataUrl: string): Blob {
 
 export async function savePhoto(taskId: string, dataUrl: string): Promise<void> {
   if (SERVER_MODE) {
-    await api(`/api/photos/${encodeURIComponent(taskId)}`, { method: 'PUT', body: dataUrlToBlob(dataUrl), headers: { 'Content-Type': 'image/jpeg' } });
+    await api(`/photos/${encodeURIComponent(taskId)}`, { method: 'PUT', body: dataUrlToBlob(dataUrl), headers: { 'Content-Type': 'image/jpeg' } });
     return;
   }
   if (!store) return;
@@ -30,16 +30,7 @@ export async function savePhoto(taskId: string, dataUrl: string): Promise<void> 
 /** A URL an <img> can show, or undefined when there is no photo. */
 export async function loadPhoto(taskId: string): Promise<string | undefined> {
   if (SERVER_MODE) {
-    let token: string | null = null;
-    try {
-      token = localStorage.getItem('kazikwanza:token');
-    } catch {
-      /* no storage */
-    }
-    const res = await fetch(`${API_BASE}/api/photos/${encodeURIComponent(taskId)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: 'no-store',
-    });
+    const res = await fetch(apiUrl(`/photos/${encodeURIComponent(taskId)}`), { headers: apiHeaders(), cache: 'no-store' });
     if (!res.ok) return undefined;
     return URL.createObjectURL(await res.blob());
   }

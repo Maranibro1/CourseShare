@@ -6,14 +6,20 @@ import { deviceTimeZone } from './time';
 import type { Account, AppData } from './types';
 
 /*
- * Two ways to run, fixed when the app is built:
+ * Three ways to run, fixed when the app is built:
  * - on its own (default): everything is stored on this phone;
- * - with the sync server (VITE_SYNC=server): accounts, tasks, photos and
- *   messages live on the server, so verifiers and parents can use their own
- *   phones. VITE_API_URL points at the server ("" = the site the app came from).
+ * - with Supabase (VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY): accounts, tasks,
+ *   photos and messages live in your Supabase project, behind the "kazi" Edge Function;
+ * - with the self-hosted Node server (VITE_SYNC=server, VITE_API_URL = its address,
+ *   or "" for the site the app came from).
+ * Either way online, verifiers and parents use their own phones.
  */
-export const SERVER_MODE = import.meta.env.VITE_SYNC === 'server';
+export const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/+$/, '');
+export const SUPABASE_KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '');
+export const SERVER_MODE = import.meta.env.VITE_SYNC === 'server' || SUPABASE_URL !== '';
 export const API_BASE = String(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
+/** Where API routes (/state, /action, …) live. */
+const ENDPOINT = SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/kazi` : `${API_BASE}/api`;
 
 const STORAGE_KEY = 'kazikwanza:v1';
 const TOKEN_KEY = 'kazikwanza:token';
@@ -139,10 +145,27 @@ class ApiError extends Error {
 
 const OFFLINE = 'Can’t reach Kazikwanza. Check your internet connection and try again.';
 
+/** Headers every API call carries: the sign-in token, and Supabase's project key when using Supabase. */
+export function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  const token = readToken();
+  if (token) h['X-Kazi-Token'] = token;
+  if (SUPABASE_KEY) {
+    h.apikey = SUPABASE_KEY;
+    // Older anon keys are JWTs and also go in Authorization; newer sb_publishable_ keys don't.
+    if (SUPABASE_KEY.split('.').length === 3) h.Authorization = `Bearer ${SUPABASE_KEY}`;
+  }
+  return h;
+}
+
+export function apiUrl(path: string): string {
+  return `${ENDPOINT}${path}`;
+}
+
 export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const token = readToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  for (const [k, v] of Object.entries(apiHeaders())) headers.set(k, v);
   let body = init.body;
   if (init.json !== undefined) {
     headers.set('Content-Type', 'application/json');
@@ -150,7 +173,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   }
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...init, headers, body });
+    res = await fetch(apiUrl(path), { ...init, headers, body });
   } catch {
     throw new ApiError(OFFLINE, 0);
   }
@@ -178,9 +201,7 @@ let etag: string | null = null;
 export async function refresh(): Promise<void> {
   if (!SERVER_MODE || !readToken()) return;
   try {
-    const headers: HeadersInit = etag ? { 'If-None-Match': etag } : {};
-    const token = readToken();
-    const res = await fetch(`${API_BASE}/api/state`, { headers: { ...headers, Authorization: `Bearer ${token}` } });
+    const res = await fetch(apiUrl('/state'), { headers: apiHeaders(etag ? { 'If-None-Match': etag } : {}) });
     if (res.status === 401) {
       forgetSession();
       return;
@@ -258,7 +279,7 @@ async function actOnServer(name: ActionName, args: Record<string, unknown>): Pro
     }
   }
   try {
-    const out = await api<{ state: AppData; result?: unknown; etag?: string }>('/api/action', { method: 'POST', json: { name, args } });
+    const out = await api<{ state: AppData; result?: unknown; etag?: string }>('/action', { method: 'POST', json: { name, args } });
     if (out.etag) etag = out.etag;
     setData(out.state);
     return { ok: true, result: out.result };
@@ -299,7 +320,7 @@ export async function signUp(input: { name: string; email: string; password: str
     useStore.getState().setData(result.data);
     return;
   }
-  const out = await api<{ token: string; state: AppData }>('/api/signup', { method: 'POST', json: { ...input, timeZone } });
+  const out = await api<{ token: string; state: AppData }>('/signup', { method: 'POST', json: { ...input, timeZone } });
   writeToken(out.token);
   useStore.getState().setData(out.state);
 }
@@ -310,7 +331,7 @@ export async function signIn(input: { email: string; password: string }): Promis
     useStore.getState().setData(localSignIn(useStore.getState().data, input.email, passwordHash));
     return;
   }
-  const out = await api<{ token: string; state: AppData }>('/api/signin', { method: 'POST', json: { ...input, timeZone: deviceTimeZone() } });
+  const out = await api<{ token: string; state: AppData }>('/signin', { method: 'POST', json: { ...input, timeZone: deviceTimeZone() } });
   writeToken(out.token);
   useStore.getState().setData(out.state);
 }
@@ -320,7 +341,7 @@ export async function signOut(): Promise<void> {
     useStore.getState().setData(localSignOut(useStore.getState().data, Date.now()));
     return;
   }
-  await api('/api/signout', { method: 'POST', json: {} }).catch(() => undefined);
+  await api('/signout', { method: 'POST', json: {} }).catch(() => undefined);
   forgetSession();
 }
 
@@ -373,24 +394,42 @@ export function useTimeZoneSync() {
 /* ───────── Live updates ───────── */
 
 /**
- * Server mode: listens for "something changed" from the server and refetches,
- * so approvals and messages appear within a second. Falls back to polling.
+ * Server mode: listens for "something changed" and refetches, so approvals and
+ * messages appear within a second or two. With Supabase the ping comes over
+ * Realtime, on a channel named after a secret only this account receives; with
+ * the Node server it comes over Server-Sent Events. Polling covers any gap.
  */
 export function useLiveUpdates() {
   const sessionId = useStore((s) => s.data.sessionId);
+  const notifyKey = useStore((s) => (s.data.sessionId ? s.data.accounts[s.data.sessionId]?.notifyKey : undefined));
   useEffect(() => {
     if (!SERVER_MODE || !sessionId) return;
     let stopped = false;
     let controller: AbortController | null = null;
+    let unsubscribe: (() => void) | null = null;
 
-    async function listen() {
+    async function listenRealtime() {
+      if (!notifyKey) return;
+      try {
+        const { RealtimeClient } = await import('@supabase/realtime-js');
+        if (stopped) return;
+        const client = new RealtimeClient(`${SUPABASE_URL.replace(/^http/, 'ws')}/realtime/v1`, { params: { apikey: SUPABASE_KEY } });
+        const channel = client.channel(`kazi-${notifyKey}`);
+        channel.on('broadcast', { event: 'change' }, () => void refresh()).subscribe();
+        unsubscribe = () => {
+          void client.removeAllChannels();
+          client.disconnect();
+        };
+      } catch {
+        /* Realtime unavailable: polling below keeps things fresh. */
+      }
+    }
+
+    async function listenEvents() {
       while (!stopped) {
         controller = new AbortController();
         try {
-          const res = await fetch(`${API_BASE}/api/events`, {
-            headers: { Authorization: `Bearer ${readToken()}` },
-            signal: controller.signal,
-          });
+          const res = await fetch(`${API_BASE}/api/events`, { headers: apiHeaders(), signal: controller.signal });
           if (res.status === 401) {
             forgetSession();
             return;
@@ -418,17 +457,19 @@ export function useLiveUpdates() {
       }
     }
 
-    void listen();
+    if (SUPABASE_URL) void listenRealtime();
+    else void listenEvents();
     const onVisible = () => document.visibilityState === 'visible' && void refresh();
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('online', onVisible);
-    const poll = window.setInterval(() => document.visibilityState === 'visible' && void refresh(), 20_000);
+    const poll = window.setInterval(() => document.visibilityState === 'visible' && void refresh(), SUPABASE_URL ? 10_000 : 20_000);
     return () => {
       stopped = true;
       controller?.abort();
+      unsubscribe?.();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', onVisible);
       window.clearInterval(poll);
     };
-  }, [sessionId]);
+  }, [sessionId, notifyKey]);
 }

@@ -131,14 +131,15 @@ test('parent and child on separate phones', async ({ browser }) => {
   await expect(mum.getByRole('link', { name: 'Messages, 1 unread message' })).toBeVisible({ timeout: 15_000 });
 });
 
-test('welcome screen offers the Android download and iPhone steps', async ({ browser }) => {
+test('welcome screen offers the Android download and iPhone steps', async ({ browser }, testInfo) => {
   const android = await phone(browser);
   await android.goto('/');
   const download = android.getByRole('link', { name: 'Download for Android' });
   await expect(download).toHaveAttribute('href', '/downloads/kazikwanza.apk');
   const res = await android.request.get('/downloads/kazikwanza.apk');
   expect(res.status()).toBe(200);
-  expect(res.headers()['content-type']).toBe('application/vnd.android.package-archive');
+  // The Node server labels the file so phones offer to install it (only it serves the APK itself).
+  if (testInfo.project.name === 'sync') expect(res.headers()['content-type']).toBe('application/vnd.android.package-archive');
 
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',

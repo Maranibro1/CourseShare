@@ -12,13 +12,15 @@
     "preview": "vite preview",
     "typecheck": "tsc -b && tsc -p tsconfig.server.json",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:supabase": "node scripts/build-supabase.mjs"
   },
   "dependencies": {
     "@capacitor/android": "6.2.2",
     "@capacitor/app": "6.0.2",
     "@capacitor/core": "6.2.2",
     "@fontsource/inter": "5.1.0",
+    "@supabase/realtime-js": "2.118.0",
     "idb-keyval": "6.2.1",
     "pg": "8.23.1",
     "qrcode": "1.5.4",
