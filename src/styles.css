@@ -966,7 +966,7 @@ p {
   height: 72px;
   border-top: 1px solid var(--line);
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding-bottom: 8px;
   background: #fff;
   z-index: 3;
@@ -986,6 +986,47 @@ p {
 .nav a.active {
   color: var(--green);
   font-weight: 600;
+}
+
+.nav-icon {
+  position: relative;
+  display: flex;
+}
+
+.nav-icon .count-badge {
+  top: -6px;
+  left: 13px;
+  right: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* ───────── Verify ───────── */
+
+.prove-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+
+.prove-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--green-50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ───────── Photo ───────── */

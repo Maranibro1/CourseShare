@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { notificationsFor, requestsFor, unreadMessages } from '../lib/logic';
+import { notificationsFor, requestsFor, todaysTasks, unreadMessages } from '../lib/logic';
 import { loadPhoto } from '../lib/photos';
-import { useData, useStore } from '../lib/store';
+import { useData, useNow, useStore } from '../lib/store';
 import type { Account } from '../lib/types';
-import { BackIcon, BellIcon, CameraIcon, ChatIcon, FamilyIcon, ListIcon, SettingsIcon, VerifyIcon, WalletIcon } from './Icons';
+import { BackIcon, BellIcon, CameraIcon, ChatIcon, FamilyIcon, ListIcon, ProveIcon, SettingsIcon, VerifyIcon, WalletIcon } from './Icons';
 
 /** Goes back in history when there is somewhere to go, otherwise to `fallback`. */
 export function useBack(fallback: string) {
@@ -67,22 +67,42 @@ export function Row({ label, value, strong }: { label: ReactNode; value: ReactNo
   );
 }
 
+/** How many things on the Verify tab need the person: tasks sent back to redo plus photos waiting for their check. */
+export function useVerifyCount(): number {
+  const data = useData();
+  const meId = data.sessionId;
+  const now = useNow(60_000);
+  if (!meId || !data.accounts[meId]) return 0;
+  const redo = todaysTasks(data, meId, now).filter((t) => t.status === 'redo').length;
+  return redo + requestsFor(data, meId).length;
+}
+
+const navClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'active' : undefined);
+
 export function BottomNav() {
+  const toVerify = useVerifyCount();
   return (
     <nav className="nav" aria-label="Main">
-      <NavLink to="/home" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+      <NavLink to="/home" className={navClass}>
         <ListIcon />
         Today
       </NavLink>
-      <NavLink to="/wallet" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+      <NavLink to="/verify" className={navClass} aria-label={toVerify ? `Verify, ${toVerify} waiting` : 'Verify'}>
+        <span className="nav-icon">
+          <ProveIcon />
+          {toVerify > 0 && <span className="count-badge">{toVerify > 9 ? '9+' : toVerify}</span>}
+        </span>
+        Verify
+      </NavLink>
+      <NavLink to="/wallet" className={navClass}>
         <WalletIcon />
         Wallet
       </NavLink>
-      <NavLink to="/family" end={false} className={({ isActive }) => (isActive ? 'active' : undefined)}>
+      <NavLink to="/family" end={false} className={navClass}>
         <FamilyIcon />
         Family
       </NavLink>
-      <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : undefined)}>
+      <NavLink to="/settings" className={navClass}>
         <SettingsIcon />
         Settings
       </NavLink>

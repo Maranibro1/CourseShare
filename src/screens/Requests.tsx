@@ -53,10 +53,42 @@ export async function approve(task: Task): Promise<boolean> {
   return ok;
 }
 
+/** One photo waiting for me: who sent it, the photo, Approve / Ask to redo, and a message button. */
+export function PhotoCheckCard({ task: t, onRedo }: { task: Task; onRedo: (t: Task) => void }) {
+  const data = useData();
+  const now = useNow(30_000);
+  const owner = data.accounts[t.ownerId];
+  return (
+    <div className="card stack-12" style={{ gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Avatar name={owner?.name ?? '?'} solid size={40} />
+        <div className="stack" style={{ flexGrow: 1, minWidth: 0 }}>
+          <span className="strong">{owner?.name}</span>
+          <span className="small">
+            {t.title} · {t.submittedAt ? timeAgo(t.submittedAt, now).toLowerCase() : ''}
+          </span>
+        </div>
+        <span className="strong">{rewardLabel(t.reward.kind, t.reward.amount)}</span>
+        <Link to={`/messages/${t.ownerId}`} className="icon-circle sm" aria-label={`Message ${owner?.name ?? 'them'}`}>
+          <ChatIcon size={20} />
+        </Link>
+      </div>
+      <StoredPhoto taskId={t.id} height={200} label={`${owner?.name}'s photo of ${t.title}`} />
+      <div className="grid-2">
+        <button className="btn btn-secondary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => onRedo(t)}>
+          Ask to redo
+        </button>
+        <button className="btn btn-primary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => void approve(t)}>
+          Approve
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Requests() {
   const me = useAccount();
   const data = useData();
-  const now = useNow(30_000);
   const [redo, setRedo] = useState<Task | null>(null);
   const pending = requestsFor(data, me.id);
   const earlier = reviewedBy(data, me.id, 8);
@@ -95,35 +127,9 @@ export function Requests() {
         </div>
       )}
       {pending.length > 0 && <h2 className="h2">Photos to check</h2>}
-      {pending.map((t) => {
-        const owner = data.accounts[t.ownerId];
-        return (
-          <div key={t.id} className="card stack-12" style={{ gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Avatar name={owner?.name ?? '?'} solid size={40} />
-              <div className="stack" style={{ flexGrow: 1, minWidth: 0 }}>
-                <span className="strong">{owner?.name}</span>
-                <span className="small">
-                  {t.title} · {t.submittedAt ? timeAgo(t.submittedAt, now).toLowerCase() : ''}
-                </span>
-              </div>
-              <span className="strong">{rewardLabel(t.reward.kind, t.reward.amount)}</span>
-              <Link to={`/messages/${t.ownerId}`} className="icon-circle sm" aria-label={`Message ${owner?.name ?? 'them'}`}>
-                <ChatIcon size={20} />
-              </Link>
-            </div>
-            <StoredPhoto taskId={t.id} height={200} label={`${owner?.name}'s photo of ${t.title}`} />
-            <div className="grid-2">
-              <button className="btn btn-secondary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => setRedo(t)}>
-                Ask to redo
-              </button>
-              <button className="btn btn-primary" style={{ height: 48, borderRadius: 12, fontSize: 15 }} onClick={() => void approve(t)}>
-                Approve
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {pending.map((t) => (
+        <PhotoCheckCard key={t.id} task={t} onRedo={setRedo} />
+      ))}
       {earlier.length > 0 && (
         <div className="stack">
           <h2 className="h2" style={{ marginBottom: 4 }}>

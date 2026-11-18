@@ -157,3 +157,11 @@ export const AddSquareIcon = (p: IconProps) => (
     <path d="M12 8.5v7M8.5 12h7" />
   </Svg>
 );
+
+/** The Verify tab: a clipboard with a tick. */
+export const ProveIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="4.5" width="14" height="16.5" rx="2.5" />
+    <path d="M9 3.5h6v3H9zM9 13.5l2.2 2.2 4.3-4.7" />
+  </Svg>
+);

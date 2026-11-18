@@ -167,6 +167,54 @@ test('verifier can ask for a redo', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Send a new photo' })).toBeVisible();
 });
 
+test('the Verify tab proves your tasks and checks other people\'s', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, 'emma@example.com');
+  await addTask(page, 'Read 20 pages', '50', 'questions');
+  await addTask(page, 'Go to the gym', '20', 'photo');
+
+  await page.getByRole('link', { name: 'Verify', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Verify', exact: true })).toBeVisible();
+  await expect(page.getByText('Send a photo to emma@example.com')).toBeVisible();
+  await expect(page.getByText('Answer 3 questions')).toBeVisible();
+  await expect(page.getByText('No photos waiting.')).toBeVisible();
+
+  // Prove the photo task straight from the tab.
+  await page.getByRole('link', { name: 'Prove Go to the gym' }).click();
+  await page.getByTestId('photo-input').setInputFiles(PHOTO);
+  await page.getByRole('button', { name: 'Send for approval' }).click();
+  await expect(page.getByRole('heading', { name: 'Sent to emma@example.com' })).toBeVisible();
+  await page.goto('/#/verify');
+  await expect(page.getByText('Waiting for emma@example.com')).toBeVisible();
+  await page.getByRole('button', { name: 'Remind' }).click();
+  await expect(page.getByText('Reminder sent to emma@example.com')).toBeVisible();
+
+  // And the questions task.
+  await page.getByRole('link', { name: 'Prove Read 20 pages' }).click();
+  await expect(page.getByRole('heading', { name: /What did you read/ })).toBeVisible();
+  await signOut(page);
+
+  // Emma sees a badge on her Verify tab and checks the photo there.
+  await signUp(page, 'Emma', 'emma@example.com');
+  await onboardPersonal(page, null);
+  const tab = page.getByRole('link', { name: 'Verify, 1 waiting' });
+  await expect(tab).toBeVisible();
+  await tab.click();
+  await expect(page.getByRole('img', { name: "Sam's photo of Go to the gym" })).toBeVisible();
+  await page.getByRole('button', { name: 'Ask to redo' }).click();
+  await page.getByRole('button', { name: 'Send back' }).click();
+  await expect(page.getByText('No photos waiting.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Verify', exact: true })).toBeVisible();
+  await signOut(page);
+
+  // Sam's tab now flags the redo, which goes back to the camera.
+  await signIn(page, 'sam@example.com');
+  await page.getByRole('link', { name: 'Verify, 1 waiting' }).click();
+  await expect(page.getByText('Redo: The photo was too blurry')).toBeVisible();
+  await page.getByRole('link', { name: 'Prove Go to the gym' }).click();
+  await expect(page.getByTestId('photo-input')).toBeAttached();
+});
+
 test('signing in with the wrong password is refused', async ({ page }) => {
   await signUp(page, 'Sam', 'sam@example.com');
   await onboardPersonal(page, null);

@@ -11,6 +11,7 @@ import { Home } from './screens/Home';
 import { Chat, Messages } from './screens/Messages';
 import { AddVerifier, ChooseMode, Permissions, PickApps, UnlockTime } from './screens/Onboarding';
 import { Requests } from './screens/Requests';
+import { Verify } from './screens/Verify';
 import { Profile, Settings } from './screens/Settings';
 import { Earned, Questions, TaskDetail, TaskForm, VerifyPhoto, Waiting } from './screens/Tasks';
 import { Notifications, ScreenTime, Wallet } from './screens/Wallet';
@@ -109,6 +110,7 @@ export default function App() {
               <Route path="/settings/verifier" element={<AddVerifier editing />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/requests" element={<Requests />} />
+              <Route path="/verify" element={<Verify />} />
               <Route path="/messages" element={<Messages />} />
               <Route path="/messages/:id" element={<Chat />} />
 
