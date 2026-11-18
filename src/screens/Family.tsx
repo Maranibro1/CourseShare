@@ -3,16 +3,18 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import QRCode from 'qrcode';
 import { ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
 import { Avatar, BackButton, HeaderActions, NavScreen, Sheet, StoredPhoto, useBack } from '../components/ui';
-import { getApp, lockedNames } from '../lib/apps';
+import { appFor, lockedAppsOf } from '../lib/apps';
+import { AppList } from '../components/AppList';
 import {
   LINK_CODE_TTL_MS,
-  TIME_GIFT,
   activeLinkCode,
   childrenOf,
   dailyCompletions,
   minutesLeft,
   requestsFor,
   rewardLabel,
+  shortGift,
+  timeGift,
   todaysTasks,
   weekStats,
 } from '../lib/logic';
@@ -20,7 +22,7 @@ import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { formatClock } from '../lib/time';
 import type { Account, Repeat, RewardKind } from '../lib/types';
 import { unlockLine, useUnseenReward, TaskRow } from './Home';
-import { AppChecklist, UnlockTimePicker } from './Onboarding';
+import { UnlockTimePicker } from './Onboarding';
 import { approve, RedoSheet } from './Requests';
 import { MissingTask, RewardPicker, useTask } from './Tasks';
 
@@ -101,7 +103,7 @@ export function ParentHome() {
         return (
           <div key={r.id} className="card stack-12">
             <span>
-              <strong>{kid?.name}</strong> asked for more time.
+              <strong>{kid?.name}</strong> asked for more time{appFor(kid, r.appId) ? ` on ${appFor(kid, r.appId)!.name}` : ''}.
             </span>
             <div className="grid-2">
               <button className="btn btn-secondary" style={{ height: 44, fontSize: 15 }} onClick={() => void act('answerTimeRequest', { requestId: r.id, grant: false })}>
@@ -114,7 +116,7 @@ export function ParentHome() {
                   if ((await act('answerTimeRequest', { requestId: r.id, grant: true })).ok) toast(`Sent to ${kid?.name}`);
                 }}
               >
-                Give {getApp(r.appId)?.kind === 'minutes' ? `${TIME_GIFT.minutes} min` : `${TIME_GIFT.scrolls} scrolls`}
+                Give {shortGift(timeGift(appFor(kid, r.appId)))}
               </button>
             </div>
           </div>
@@ -429,7 +431,9 @@ export function ChildWeek() {
   const stats = weekStats(data, kid.id, now);
   const days = dailyCompletions(data, kid.id, now);
   const max = Math.max(1, ...days.map((d) => d.count));
-  const locked = [lockedNames(kid.lockedApps, 'scrolls'), lockedNames(kid.lockedApps, 'minutes')].filter(Boolean).join(', ');
+  const locked = lockedAppsOf(kid)
+    .map((a) => a.name)
+    .join(', ');
 
   return (
     <main className="screen">
@@ -506,7 +510,13 @@ export function ChildRules() {
     <main className="screen gap-20">
       <BackButton fallback={`/family/child/${kid.id}`} />
       <h1 className="h1">{kid.name}'s rules</h1>
-      <AppChecklist value={locked} onChange={setLocked} />
+      <AppList
+        owner={{ phoneApps: kid.phoneApps, lockedApps: locked }}
+        isOn={(id) => locked.includes(id)}
+        onToggle={(a, on) => setLocked(on ? [...locked, a.id] : locked.filter((x) => x !== a.id))}
+        control="check"
+        whose={`${kid.name}'s`}
+      />
       <div className="stack-12">
         <span className="eyebrow">Free unlock time</span>
         <UnlockTimePicker time={time} onTime={setTime} noFree={noFree} onNoFree={setNoFree} />

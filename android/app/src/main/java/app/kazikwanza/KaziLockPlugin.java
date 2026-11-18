@@ -5,7 +5,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.util.Base64;
 import android.os.Process;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -15,6 +20,10 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.ByteArrayOutputStream;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONException;
 
@@ -99,10 +108,67 @@ public class KaziLockPlugin extends Plugin {
         call.resolve(out);
     }
 
+    /** Icon size sent to the app, in pixels. Small enough that a phone full of apps stays quick. */
+    private static final int ICON_PX = 72;
+
+    /**
+     * Every app with an icon on the home screen, with its name and icon, so any
+     * of them can be given a screen-time limit. The phone app, Settings, home
+     * screens and Kazikwanza itself are left out: they are never locked.
+     * Plugin calls already run off the main thread, so loading icons here is fine.
+     */
+    @PluginMethod
+    public void listApps(PluginCall call) {
+        JSObject out = new JSObject();
+        out.put("apps", installedApps(getContext()));
+        call.resolve(out);
+    }
+
+    /** The list behind {@link #listApps}: {@code pkg}, {@code name} and {@code icon} (a PNG data URL) for each app. */
+    static JSArray installedApps(Context context) {
+        PackageManager pm = context.getPackageManager();
+        Set<String> skip = SafeApps.packages(context);
+        Set<String> seen = new HashSet<>();
+        JSArray apps = new JSArray();
+        Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> found = pm.queryIntentActivities(launcher, 0);
+        for (ResolveInfo info : found) {
+            if (info.activityInfo == null) continue;
+            String pkg = info.activityInfo.packageName;
+            if (skip.contains(pkg) || !seen.add(pkg)) continue;
+            JSObject app = new JSObject();
+            app.put("pkg", pkg);
+            CharSequence label = info.loadLabel(pm);
+            app.put("name", label == null ? pkg : label.toString());
+            String icon = iconData(info.loadIcon(pm));
+            if (icon != null) app.put("icon", icon);
+            apps.put(app);
+        }
+        return apps;
+    }
+
+    private static String iconData(Drawable drawable) {
+        if (drawable == null) return null;
+        try {
+            Bitmap bitmap = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            drawable.setBounds(0, 0, ICON_PX, ICON_PX);
+            drawable.draw(canvas);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes);
+            bitmap.recycle();
+            return "data:image/png;base64," + Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP);
+        } catch (RuntimeException e) {
+            // A broken icon just means the app shows its first letter instead.
+            return null;
+        }
+    }
+
     /** Called by MainActivity when the lock service brings Kazikwanza to the front. */
-    void notifyLocked(String appId) {
+    void notifyLocked(String appId, String kind) {
         JSObject data = new JSObject();
         data.put("appId", appId);
+        if (kind != null) data.put("kind", kind);
         // Kept until the page adds its listener, so a cold start still shows the lock screen.
         notifyListeners("locked", data, true);
     }

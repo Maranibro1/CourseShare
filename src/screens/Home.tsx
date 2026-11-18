@@ -74,8 +74,8 @@ export function Home() {
 
   const tasks = todaysTasks(data, me.id, now);
   const doneCount = tasks.filter((t) => t.status === 'done').length;
-  const scrollApps = lockedNames(me.lockedApps, 'scrolls');
-  const timeApps = lockedNames(me.lockedApps, 'minutes');
+  const scrollApps = lockedNames(me, 'scrolls');
+  const timeApps = lockedNames(me, 'minutes');
   const minutes = minutesLeft(me, now);
 
   return (

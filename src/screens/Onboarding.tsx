@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckIcon, ShieldIcon } from '../components/Icons';
 import { BackButton, StepHeader } from '../components/ui';
-import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
+import { AppList } from '../components/AppList';
 import { setDeviceOwner } from '../lib/device';
 import { appLink } from '../lib/install';
 import { isValidContact, normalizeContact } from '../lib/logic';
@@ -144,30 +144,6 @@ export function Permissions() {
   );
 }
 
-export function AppChecklist({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
-  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
-  const group = (title: string, hint: string, apps: typeof SCROLL_APPS) => (
-    <div className="stack">
-      <span className="eyebrow">{title}</span>
-      <span className="small" style={{ padding: '2px 0 4px' }}>
-        {hint}
-      </span>
-      {apps.map((a) => (
-        <label key={a.id} className="row" style={{ cursor: 'pointer', minHeight: 48 }}>
-          <span>{a.name}</span>
-          <input type="checkbox" className="check" checked={value.includes(a.id)} onChange={() => toggle(a.id)} />
-        </label>
-      ))}
-    </div>
-  );
-  return (
-    <>
-      {group('Scrolling apps', 'Unlocked with scrolls. Each swipe uses 1.', SCROLL_APPS)}
-      {group('Other apps', 'Unlocked with screen time. Counted in minutes.', TIME_APPS)}
-    </>
-  );
-}
-
 export function PickApps() {
   const me = useAccount();
   const navigate = useNavigate();
@@ -177,7 +153,12 @@ export function PickApps() {
     <main className="screen gap-20">
       <StepHeader step={3} of={4} fallback="/onboarding/permissions" />
       <h1 className="h1">Which apps should be locked?</h1>
-      <AppChecklist value={locked} onChange={setLocked} />
+      <AppList
+        owner={{ phoneApps: me.phoneApps, lockedApps: locked }}
+        isOn={(id) => locked.includes(id)}
+        onToggle={(a, on) => setLocked(on ? [...locked, a.id] : locked.filter((x) => x !== a.id))}
+        control="check"
+      />
       <div className="spacer" />
       <button
         className="btn btn-primary"

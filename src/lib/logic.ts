@@ -2,7 +2,7 @@
  * All state changes live here as pure functions over AppData, so they can be
  * unit tested without a browser. Each mutation takes `now` explicitly.
  */
-import { APPS, DEFAULT_LOCKED, getApp } from './apps';
+import { DEFAULT_LOCKED, appFor, appsFor, isValidAppId, lockedAppsOf, usesMinutes, usesScrolls, type LockableApp } from './apps';
 import { DAY, HOUR, MINUTE, clockToday, dayKey, formatClock, isValidTimeZone, isWeekday, startOfDay, startOfWeek } from './time';
 import type {
   Account,
@@ -183,11 +183,21 @@ export function freeUnlockActive(a: Account, now: number): boolean {
 export type Access = 'not-locked' | 'free' | 'balance' | 'locked';
 
 export function accessFor(a: Account, appId: string, now: number): Access {
-  const app = getApp(appId);
+  const app = appFor(a, appId);
   if (!app || !a.lockedApps.includes(appId)) return 'not-locked';
   if (freeUnlockActive(a, now)) return 'free';
-  if (app.kind === 'scrolls') return a.scrolls > 0 ? 'balance' : 'locked';
-  return remainingSeconds(a, now) > 0 ? 'balance' : 'locked';
+  const scrolls = a.scrolls > 0;
+  const time = remainingSeconds(a, now) > 0;
+  // YouTube opens while either is left: Shorts need scrolls, videos need screen time.
+  if (app.kind === 'mixed') return scrolls || time ? 'balance' : 'locked';
+  if (app.kind === 'scrolls') return scrolls ? 'balance' : 'locked';
+  return time ? 'balance' : 'locked';
+}
+
+/** The history label for screen time spent in an app. */
+export function timeLabel(app: LockableApp): string {
+  if (app.kind === 'mixed') return `Watched ${app.name}`;
+  return app.found ? `Used ${app.name}` : `Played ${app.name}`;
 }
 
 /** Screen time left, counting down live while a timed app is open. */
@@ -208,12 +218,12 @@ export function sessionElapsedSeconds(a: Account, now: number): number {
 }
 
 export function startSession(data: AppData, accountId: string, appId: string, now: number): AppData {
-  const app = getApp(appId);
-  if (!app || app.kind !== 'minutes') throw new KaziError('Only timed apps use screen time');
+  const app = appFor(data.accounts[accountId], appId);
+  if (!app || !usesMinutes(app)) throw new KaziError('Only timed apps use screen time');
   let next = data.accounts[accountId].session ? closeSession(data, accountId, now) : data;
   const a0 = account(next, accountId);
   const access = accessFor(a0, appId, now);
-  if (access === 'locked') throw new KaziError(`${app.name} is locked`);
+  if (access === 'locked' || (access === 'balance' && remainingSeconds(a0, now) <= 0)) throw new KaziError(`${app.name} is locked`);
   next = clone(next);
   account(next, accountId).session = { appId, startedAt: now, free: access !== 'balance' };
   return next;
@@ -225,12 +235,12 @@ export function closeSession(data: AppData, accountId: string, now: number): App
   const a = account(next, accountId);
   const s = a.session;
   if (!s) return data;
-  const app = getApp(s.appId);
+  const app = appFor(a, s.appId);
   if (!s.free) {
     const used = Math.min(a.screenSeconds, (now - s.startedAt) / 1000);
     a.screenSeconds = Math.max(0, a.screenSeconds - used);
     if (used >= 30 && app) {
-      pushLedger(a, { at: now, label: `Played ${app.name}`, amount: -Math.max(1, Math.round(used / 60)), unit: 'minutes' });
+      pushLedger(a, { at: now, label: timeLabel(app), amount: -Math.max(1, Math.round(used / 60)), unit: 'minutes', appId: app.id });
     }
   }
   a.session = null;
@@ -253,14 +263,15 @@ export function spendScroll(
   const a0 = account(data, accountId);
   const access = accessFor(a0, appId, now);
   if (access === 'free' || access === 'not-locked') return { data, result: 'free' };
-  if (access === 'locked') return { data, result: 'locked' };
+  // YouTube can be open on screen time alone, but Shorts still need scrolls.
+  if (access === 'locked' || a0.scrolls <= 0) return { data, result: 'locked' };
   const next = clone(data);
   const a = account(next, accountId);
   a.scrolls -= 1;
-  const app = getApp(appId);
+  const app = appFor(a, appId);
   const existing = a.ledger.find((l) => l.id === sessionKey);
   if (existing) existing.amount -= 1;
-  else pushLedger(a, { at: now, label: `Scrolled ${app?.name ?? appId}`, amount: -1, unit: 'scrolls' }, sessionKey);
+  else pushLedger(a, { at: now, label: `Scrolled ${app?.name ?? appId}`, amount: -1, unit: 'scrolls', appId }, sessionKey);
   const today = dayKey(now);
   if (a.scrolls === LOW_SCROLLS && a.lowScrollNoticeDay !== today) {
     a.lowScrollNoticeDay = today;
@@ -675,10 +686,12 @@ export function dailyCompletions(data: AppData, ownerId: string, now: number): {
 export function minutesUsedToday(a: Account, now: number): Record<string, number> {
   const from = startOfDay(now);
   const out: Record<string, number> = {};
-  for (const app of APPS) if (app.kind === 'minutes') out[app.id] = 0;
+  const timed = appsFor(a).filter(usesMinutes);
+  for (const app of timed) out[app.id] = 0;
   for (const l of a.ledger) {
     if (l.at < from || l.unit !== 'minutes' || l.amount >= 0) continue;
-    const app = APPS.find((x) => l.label === `Played ${x.name}`);
+    // Older lines have no app id; match those by their label.
+    const app = l.appId ? timed.find((x) => x.id === l.appId) : timed.find((x) => l.label === timeLabel(x) || l.label === `Played ${x.name}`);
     if (app) out[app.id] += -l.amount;
   }
   if (a.session && !a.session.free) {
@@ -698,15 +711,17 @@ export function emergencyUnlock(data: AppData, accountId: string, appId: string,
   const a0 = account(data, accountId);
   if (a0.mode === 'child') throw new KaziError('Ask your parent for more time instead');
   if (emergencyLeft(a0, now) <= 0) throw new KaziError('No emergency unlocks left this week');
-  const app = getApp(appId);
+  const app = appFor(a0, appId);
   if (!app) throw new KaziError('Unknown app');
   const next = clone(data);
   const a = account(next, accountId);
   a.emergencyUses.push(now);
-  if (app.kind === 'scrolls') {
+  // YouTube gets a little of both, so Shorts and videos both open.
+  if (usesScrolls(app)) {
     a.scrolls += EMERGENCY_SCROLLS;
     pushLedger(a, { at: now, label: `Emergency unlock · ${app.name}`, amount: EMERGENCY_SCROLLS, unit: 'scrolls' });
-  } else {
+  }
+  if (usesMinutes(app)) {
     a.screenSeconds += EMERGENCY_MINUTES * 60;
     pushLedger(a, { at: now, label: `Emergency unlock · ${app.name}`, amount: EMERGENCY_MINUTES, unit: 'minutes' });
   }
@@ -780,10 +795,32 @@ export function setChildRules(
   if (child.parentId !== parentId) throw new KaziError('This child is not linked to you');
   const next = clone(data);
   const c = account(next, childId);
-  c.lockedApps = rules.lockedApps.filter((id) => getApp(id));
+  c.lockedApps = [...new Set(rules.lockedApps.filter(isValidAppId))];
   c.unlockTime = rules.unlockTime;
   notify(next, childId, `${account(next, parentId).name} updated your rules`, '/child', now);
   return next;
+}
+
+/** What a parent's "yes" to "more time" gives: scrolls, screen time, or for YouTube both. */
+export function timeGift(app: LockableApp | undefined): { scrolls: number; minutes: number } {
+  if (!app) return { scrolls: TIME_GIFT.scrolls, minutes: 0 };
+  return { scrolls: usesScrolls(app) ? TIME_GIFT.scrolls : 0, minutes: usesMinutes(app) ? TIME_GIFT.minutes : 0 };
+}
+
+/** "20 scrolls", "15 min of screen time" or "20 scrolls and 15 min of screen time". */
+export function giftLabel(gift: { scrolls: number; minutes: number }): string {
+  const parts = [];
+  if (gift.scrolls) parts.push(`${gift.scrolls} scrolls`);
+  if (gift.minutes) parts.push(`${gift.minutes} min of screen time`);
+  return parts.join(' and ');
+}
+
+/** "20 scrolls", "15 min" or "20 scrolls + 15 min", for a button. */
+export function shortGift(gift: { scrolls: number; minutes: number }): string {
+  const parts = [];
+  if (gift.scrolls) parts.push(`${gift.scrolls} scrolls`);
+  if (gift.minutes) parts.push(`${gift.minutes} min`);
+  return parts.join(' + ');
 }
 
 export function askForTime(data: AppData, childId: string, appId: string, now: number): AppData {
@@ -792,7 +829,7 @@ export function askForTime(data: AppData, childId: string, appId: string, now: n
   if (data.timeRequests.some((r) => r.childId === childId && r.status === 'open')) {
     throw new KaziError('You already asked. Wait for your parent to answer.');
   }
-  const app = getApp(appId);
+  const app = appFor(child, appId);
   const next = clone(data);
   next.timeRequests.push({ id: newId('r'), childId, parentId: child.parentId, appId, at: now, status: 'open' });
   notify(next, child.parentId, `${child.name} asked for more time on ${app?.name ?? 'an app'}`, '/family', now);
@@ -808,17 +845,17 @@ export function answerTimeRequest(data: AppData, requestId: string, parentId: st
   r.status = grant ? 'granted' : 'declined';
   const child = account(next, r.childId);
   const parent = account(next, parentId);
-  const app = getApp(r.appId);
+  const gift = timeGift(appFor(child, r.appId));
   if (grant) {
-    if (app?.kind === 'minutes') {
-      child.screenSeconds += TIME_GIFT.minutes * 60;
-      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: TIME_GIFT.minutes, unit: 'minutes' });
-      notify(next, child.id, `${parent.name} gave you ${TIME_GIFT.minutes} min of screen time`, '/child', now);
-    } else {
-      child.scrolls += TIME_GIFT.scrolls;
-      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: TIME_GIFT.scrolls, unit: 'scrolls' });
-      notify(next, child.id, `${parent.name} gave you ${TIME_GIFT.scrolls} scrolls`, '/child', now);
+    if (gift.minutes) {
+      child.screenSeconds += gift.minutes * 60;
+      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: gift.minutes, unit: 'minutes' });
     }
+    if (gift.scrolls) {
+      child.scrolls += gift.scrolls;
+      pushLedger(child, { at: now, label: `Gift from ${parent.name}`, amount: gift.scrolls, unit: 'scrolls' });
+    }
+    notify(next, child.id, `${parent.name} gave you ${giftLabel(gift)}`, '/child', now);
   } else {
     notify(next, child.id, `${parent.name} said not now. Finish a task to earn more.`, '/child', now);
   }
@@ -855,7 +892,7 @@ export interface NativeUsageEvent {
 /** What the phone should enforce, sent to the KaziLock plugin. */
 export interface NativeRules {
   enabled: boolean;
-  apps: { id: string; name: string; kind: RewardKind; packages: string[] }[];
+  apps: { id: string; name: string; kind: LockableApp['kind']; packages: string[] }[];
   scrolls: number;
   screenSeconds: number;
   unlockTime: string;
@@ -866,7 +903,7 @@ export interface NativeRules {
 export function nativeRules(a: Account, deviceId: string): NativeRules {
   return {
     enabled: a.onboarded && a.lockedApps.length > 0,
-    apps: APPS.filter((x) => a.lockedApps.includes(x.id)).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
+    apps: lockedAppsOf(a).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
     scrolls: a.scrolls,
     screenSeconds: a.screenSeconds,
     unlockTime: a.unlockTime ?? '',
@@ -888,16 +925,17 @@ export function applyNativeEvents(data: AppData, accountId: string, deviceId: st
   const a = account(next, accountId);
   const today = dayKey(now);
   for (const e of fresh) {
-    const app = getApp(e.appId);
+    const app = appFor(a, e.appId);
     const name = app?.name ?? e.appId;
-    const ledgerId = `n_${deviceId}_${e.session}`;
-    const line = a.ledger.find((l) => l.id === ledgerId);
+    // One YouTube visit can have both Shorts swipes and video time: each kind gets its own line.
+    const ledgerId = `n_${deviceId}_${e.session}${e.kind === 'minutes' ? '_t' : ''}`;
+    const line = a.ledger.find((l) => l.id === ledgerId && l.unit === e.kind);
     if (e.kind === 'scrolls') {
       const n = Math.max(0, Math.round(e.amount));
       const before = a.scrolls;
       a.scrolls = Math.max(0, before - n);
       if (line) line.amount -= n;
-      else pushLedger(a, { at: e.at, label: `Scrolled ${name}`, amount: -n, unit: 'scrolls' }, ledgerId);
+      else pushLedger(a, { at: e.at, label: `Scrolled ${name}`, amount: -n, unit: 'scrolls', appId: e.appId }, ledgerId);
       if (before > LOW_SCROLLS && a.scrolls <= LOW_SCROLLS && a.scrolls > 0 && a.lowScrollNoticeDay !== today) {
         a.lowScrollNoticeDay = today;
         notify(next, accountId, `You have ${a.scrolls} scrolls left`, '/wallet', now);
@@ -909,7 +947,8 @@ export function applyNativeEvents(data: AppData, accountId: string, deviceId: st
         line.seconds = (line.seconds ?? 0) + secs;
         line.amount = -Math.round(line.seconds / 60);
       } else {
-        pushLedger(a, { at: e.at, label: `Played ${name}`, amount: -Math.round(secs / 60), unit: 'minutes', seconds: secs }, ledgerId);
+        const label = app ? timeLabel(app) : `Played ${name}`;
+        pushLedger(a, { at: e.at, label, amount: -Math.round(secs / 60), unit: 'minutes', seconds: secs, appId: e.appId }, ledgerId);
       }
     }
     a.nativeSeqs = { ...a.nativeSeqs, [deviceId]: e.seq };

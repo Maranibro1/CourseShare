@@ -16,6 +16,22 @@
         <package android:name="com.mojang.minecraftpe" />
         <package android:name="com.netflix.mediaclient" />
         <package android:name="com.snapchat.android" />
+        <!-- Every app with a home-screen icon, so any of them can get a screen-time limit. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- Home screens, the phone app and Settings: never locked, so nobody is cut off from calling for help. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.SETTINGS" />
+        </intent>
     </queries>
 
     <application

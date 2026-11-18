@@ -27,6 +27,7 @@ export function publicAccount(a: Account, viewerEmail = ''): Account {
     session: null,
     nativeSeqs: {},
     notifyKey: undefined,
+    phoneApps: undefined,
     unlockNoticeDay: null,
     lowScrollNoticeDay: null,
   };

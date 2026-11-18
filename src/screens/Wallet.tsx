@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BackButton, NavScreen } from '../components/ui';
-import { TIME_APPS, getApp } from '../lib/apps';
+import { appFor, lockedAppsOf, usesMinutes } from '../lib/apps';
 import { minutesUsedToday, minutesLeft, notificationsFor, remainingSeconds, rewardLabel, weekStats } from '../lib/logic';
 import { act, useAccount, useData, useNow } from '../lib/store';
 import { formatMinSec, timeAgo } from '../lib/time';
@@ -93,7 +93,8 @@ export function ScreenTime() {
   const remaining = remainingSeconds(me, now);
   const used = minutesUsedToday(me, now);
   const session = me.session;
-  const app = session ? getApp(session.appId) : undefined;
+  const app = session ? appFor(me, session.appId) : undefined;
+  const timed = lockedAppsOf(me).filter(usesMinutes);
 
   return (
     <main className="screen">
@@ -105,7 +106,7 @@ export function ScreenTime() {
           {minutesLeft(me, now)}
           <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: 0 }}> min</span>
         </span>
-        <span className="sub">Earned from tasks. Used by games and other non-scrolling apps.</span>
+        <span className="sub">Earned from tasks. Used by games, YouTube videos and other apps you limit.</span>
       </div>
       {session && app && (
         <Link to={`/app/${app.id}`} className="timer-pill">
@@ -121,13 +122,13 @@ export function ScreenTime() {
         <h2 className="h2" style={{ marginBottom: 4 }}>
           Used today
         </h2>
-        {TIME_APPS.filter((a) => me.lockedApps.includes(a.id)).map((a) => (
+        {timed.map((a) => (
           <div className="row" key={a.id}>
             <span>{a.name}</span>
             <span className="muted">{used[a.id] ?? 0} min</span>
           </div>
         ))}
-        {TIME_APPS.every((a) => !me.lockedApps.includes(a.id)) && <div className="empty-state">No timed apps are locked.</div>}
+        {timed.length === 0 && <div className="empty-state">No timed apps are locked.</div>}
       </div>
       <div className="spacer" />
       {me.mode === 'child' ? (

@@ -215,6 +215,59 @@ test('the Verify tab proves your tasks and checks other people\'s', async ({ pag
   await expect(page.getByTestId('photo-input')).toBeAttached();
 });
 
+test('YouTube: Shorts use scrolls, videos use screen time', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  await addTask(page, 'Read 20 pages', '50', 'questions');
+  await page.getByRole('link', { name: /Read 20 pages/ }).click();
+  await page.getByRole('link', { name: "I'm done, verify it" }).click();
+  for (const answer of ['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.']) {
+    await page.getByLabel('Your answer').fill(answer);
+    const next = page.getByRole('button', { name: 'Next' });
+    if (await next.isVisible()) await next.click();
+  }
+  await page.getByText('I honestly completed this task').click();
+  await page.getByRole('button', { name: 'Finish' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByTestId('scroll-balance')).toHaveText('50');
+
+  await page.getByRole('link', { name: 'Open your apps' }).click();
+  await page.getByRole('button', { name: 'Open YouTube' }).click();
+  await expect(page.getByTestId('mixed-meter')).toHaveText('50 scrolls · 0 min');
+
+  // Shorts: each swipe costs a scroll.
+  await page.getByRole('button', { name: 'Watch Shorts' }).click();
+  const feed = page.getByTestId('feed');
+  for (let i = 1; i <= 2; i += 1) {
+    await feed.evaluate((el, n) => el.scrollTo({ top: el.clientHeight * n }), i);
+    await expect(page.getByTestId('scroll-meter')).toHaveText(`${50 - i} scrolls left`);
+  }
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.getByTestId('mixed-meter')).toHaveText('48 scrolls · 0 min');
+
+  // A regular video needs screen time, which Sam doesn't have, but Shorts still work.
+  await page.getByRole('button', { name: 'Watch a video' }).click();
+  await expect(page.getByRole('heading', { name: 'YouTube videos are locked' })).toBeVisible();
+  await expect(page.getByText('Shorts still work with your scrolls.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open YouTube' })).toBeVisible();
+
+  await page.goto('/#/wallet');
+  await expect(page.getByText('Scrolled YouTube')).toBeVisible();
+});
+
+test('settings list every app, with how each one is paid for', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await expect(page.getByText('Shorts: scrolls · videos: screen time')).toBeVisible();
+  await expect(page.getByText('Apps on your phone')).toBeVisible();
+  await expect(page.getByText(/Open Kazikwanza on your Android phone/)).toBeVisible();
+  const snapchat = page.getByRole('button', { name: 'Lock Snapchat' });
+  await expect(snapchat).toHaveAttribute('aria-pressed', 'false');
+  await snapchat.click();
+  await expect(snapchat).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('signing in with the wrong password is refused', async ({ page }) => {
   await signUp(page, 'Sam', 'sam@example.com');
   await onboardPersonal(page, null);

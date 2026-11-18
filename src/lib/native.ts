@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { App as CapApp } from '@capacitor/app';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import { normalizePhoneApps } from './apps';
 import { applyNativeEvents, nativeRules, type NativeRules, type NativeUsageEvent } from './logic';
 import { deviceId, deviceOwner } from './device';
 import { SERVER_MODE, act, useStore } from './store';
@@ -14,7 +15,10 @@ interface KaziLockPlugin {
   sync(rules: NativeRules): Promise<void>;
   drain(options: { after: number }): Promise<{ events: NativeUsageEvent[] }>;
   openApp(options: { packages: string[] }): Promise<{ opened: boolean }>;
-  addListener(event: 'locked', fn: (e: { appId: string }) => void): Promise<PluginListenerHandle>;
+  /** Apps with an icon on the home screen, except the phone, Settings, home screens and Kazikwanza. */
+  listApps(): Promise<{ apps: { pkg: string; name: string; icon?: string }[] }>;
+  /** `kind` says which part of YouTube was locked: Shorts ("scrolls") or videos ("minutes"). */
+  addListener(event: 'locked', fn: (e: { appId: string; kind?: string }) => void): Promise<PluginListenerHandle>;
 }
 
 /** True inside the Android app, where real apps can be locked. */
@@ -60,6 +64,62 @@ function owner(data: AppData): Account | undefined {
   return data.accounts[id];
 }
 
+/* ───────── Apps installed on this phone ───────── */
+
+/** Icons of the phone's apps, by package. Kept in memory only: they never leave the phone. */
+let icons: ReadonlyMap<string, string> = new Map();
+const iconListeners = new Set<() => void>();
+let lastScan = 0;
+let scanning: Promise<void> | null = null;
+const RESCAN_MS = 10 * 60_000;
+
+/**
+ * Asks the phone which apps are installed and saves the list on the account of
+ * the person this phone belongs to, so they (or their parent, from another
+ * phone) can give any of them a screen-time limit.
+ */
+export function scanPhoneApps(force = false): Promise<void> {
+  if (!isNativeAndroid) return Promise.resolve();
+  if (scanning) return scanning;
+  if (!force && Date.now() - lastScan < RESCAN_MS) return Promise.resolve();
+  lastScan = Date.now();
+  scanning = (async () => {
+    try {
+      const { apps } = await KaziLock.listApps();
+      const nextIcons = new Map<string, string>();
+      for (const a of apps) if (a.icon?.startsWith('data:image/')) nextIcons.set(a.pkg, a.icon);
+      icons = nextIcons;
+      iconListeners.forEach((l) => l());
+      const data = useStore.getState().data;
+      const me = owner(data);
+      // Only the phone's own person: someone else signed in here doesn't get this phone's list.
+      if (!me || data.sessionId !== me.id) return;
+      const list = normalizePhoneApps(apps.map(({ pkg, name }) => ({ pkg, name })));
+      if (JSON.stringify(list) !== JSON.stringify(me.phoneApps ?? [])) await act('updateProfile', { patch: { phoneApps: list } });
+    } catch {
+      // An old build without listApps, or the phone said no; the built-in list still works.
+      lastScan = 0;
+    } finally {
+      scanning = null;
+    }
+  })();
+  return scanning;
+}
+
+/** Icons for the phone's apps (empty off Android). Scans once when first shown. */
+export function usePhoneAppIcons(): ReadonlyMap<string, string> {
+  useEffect(() => {
+    void scanPhoneApps(icons.size === 0);
+  }, []);
+  return useSyncExternalStore(
+    (l) => {
+      iconListeners.add(l);
+      return () => iconListeners.delete(l);
+    },
+    () => icons,
+  );
+}
+
 let pumping = false;
 
 /** Pulls usage from the phone into the wallet, then pushes the current rules back. */
@@ -100,12 +160,17 @@ export function useNativeBridge() {
   useEffect(() => {
     if (!isNativeAndroid) return;
     const handles: Promise<PluginListenerHandle>[] = [];
-    handles.push(KaziLock.addListener('locked', ({ appId }) => {
+    handles.push(KaziLock.addListener('locked', ({ appId, kind }) => {
       void pumpNative();
-      navigate(`/locked/${appId}`);
+      const part = kind === 'scrolls' || kind === 'minutes' ? `?part=${kind}` : '';
+      navigate(`/locked/${appId}${part}`);
     }));
-    handles.push(CapApp.addListener('resume', () => void pumpNative()));
+    handles.push(CapApp.addListener('resume', () => {
+      void pumpNative();
+      void scanPhoneApps();
+    }));
     void pumpNative();
+    void scanPhoneApps();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void pumpNative();
     }, 5000);

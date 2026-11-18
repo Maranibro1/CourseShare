@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { AppIcon } from '../components/AppList';
 import { LockIcon, TimerIcon } from '../components/Icons';
 import { BackButton, useBack } from '../components/ui';
-import { APPS, getApp, type LockableApp } from '../lib/apps';
+import { APPS, appFor, lockedAppsOf, usesMinutes, usesScrolls, type LockableApp } from '../lib/apps';
 import {
   EMERGENCY_MINUTES,
   EMERGENCY_PER_WEEK,
@@ -27,6 +28,7 @@ function statusText(me: Account, app: LockableApp, now: number): string {
   if (access === 'not-locked') return 'Not locked';
   if (access === 'free') return 'Free now';
   if (access === 'locked') return 'Locked';
+  if (app.kind === 'mixed') return `${me.scrolls} · ${minutesLeft(me, now)} min`;
   return app.kind === 'scrolls' ? `${me.scrolls} scrolls` : `${minutesLeft(me, now)} min`;
 }
 
@@ -65,23 +67,16 @@ export function Launcher() {
         <h1 className="h1">Your apps</h1>
         <p className="lead">
           {isNativeAndroid
-            ? 'Open an app from here or from your home screen. Each swipe to a new post uses 1 scroll; games use screen time.'
-            : 'Open an app the way you would on your phone. Each swipe to a new post uses 1 scroll; games use screen time.'}
+            ? 'Open an app from here or from your home screen. Each swipe to a new post uses 1 scroll; games, YouTube videos and apps you limit use screen time.'
+            : 'Open an app the way you would on your phone. Each swipe to a new post uses 1 scroll; games and YouTube videos use screen time.'}
         </p>
       </div>
       <div className="launcher">
-        {APPS.map((a) => {
+        {[...APPS, ...lockedAppsOf(me).filter((a) => a.found)].map((a) => {
           const access = accessFor(me, a.id, now);
           return (
             <button key={a.id} onClick={() => open(a, access)} aria-label={`Open ${a.name}`}>
-              <span className="app-icon" style={{ background: a.color }}>
-                {a.name.charAt(0)}
-                {access === 'locked' && (
-                  <span className="lock">
-                    <LockIcon size={13} color="#15803D" width={2.4} />
-                  </span>
-                )}
-              </span>
+              <AppIcon app={a} locked={access === 'locked'} />
               <span>{a.name}</span>
               <span className="app-status">{statusText(me, a, now)}</span>
             </button>
@@ -121,7 +116,7 @@ function post(i: number, seed: number) {
   };
 }
 
-function Feed({ app }: { app: LockableApp }) {
+function Feed({ app, onClose }: { app: LockableApp; onClose?: () => void }) {
   const me = useAccount();
   const navigate = useNavigate();
   const now = useNow(1000);
@@ -149,7 +144,7 @@ function Feed({ app }: { app: LockableApp }) {
         const { ok, result } = await act('spendScroll', { appId: app.id, sessionKey: sessionKey.current });
         if (ok && result === 'locked') {
           lockedOut.current = true;
-          navigate(`/locked/${app.id}`, { replace: true });
+          navigate(`/locked/${app.id}${app.kind === 'mixed' ? '?part=scrolls' : ''}`, { replace: true });
         }
       });
     }
@@ -162,10 +157,10 @@ function Feed({ app }: { app: LockableApp }) {
   return (
     <div className="with-nav" style={{ background: '#000' }}>
       <div className="app-bar">
-        <button className="close-app" onClick={close}>
-          Close
+        <button className="close-app" onClick={onClose ?? close}>
+          {onClose ? 'Back' : 'Close'}
         </button>
-        <strong>{app.name}</strong>
+        <strong>{app.kind === 'mixed' ? `${app.name} Shorts` : app.name}</strong>
         <span className="scroll-meter" data-testid="scroll-meter">
           {meter}
         </span>
@@ -190,17 +185,19 @@ function Feed({ app }: { app: LockableApp }) {
 
 /* ───────── Simulated timed app ───────── */
 
-function TimedApp({ app }: { app: LockableApp }) {
+function TimedApp({ app, onClose }: { app: LockableApp; onClose?: () => void }) {
   const me = useAccount();
   const navigate = useNavigate();
   const now = useNow(250);
+  const part = app.kind === 'mixed' ? '?part=minutes' : '';
+  const what = app.kind === 'mixed' ? `A ${app.name} video` : app.name;
   const session = me.session?.appId === app.id ? me.session : null;
   const remaining = remainingSeconds(me, now);
 
   useEffect(() => {
     if (!session) {
       void act('startSession', { appId: app.id }).then(({ ok }) => {
-        if (!ok) navigate(`/locked/${app.id}`, { replace: true });
+        if (!ok) navigate(`/locked/${app.id}${part}`, { replace: true });
       });
     }
     // Start once per visit; the session survives leaving the screen, like a real app in the background.
@@ -211,10 +208,10 @@ function TimedApp({ app }: { app: LockableApp }) {
     if (session && !session.free && remaining <= 0 && !closing.current) {
       closing.current = true;
       void act('closeSession', { at: session.startedAt + me.screenSeconds * 1000 }).then(() =>
-        navigate(`/locked/${app.id}`, { replace: true }),
+        navigate(`/locked/${app.id}${part}`, { replace: true }),
       );
     }
-  }, [session, remaining, me.screenSeconds, app.id, navigate]);
+  }, [session, remaining, me.screenSeconds, app.id, navigate, part]);
 
   return (
     <main className="screen centered" style={{ background: app.color, color: '#fff' }}>
@@ -223,9 +220,11 @@ function TimedApp({ app }: { app: LockableApp }) {
         <span style={{ fontSize: 64, fontWeight: 700, letterSpacing: -2 }} data-testid="timer">
           {session?.free ? '∞' : formatMinSec(remaining)}
         </span>
-        <span style={{ fontSize: 18, fontWeight: 600 }}>{app.name} is open</span>
+        <span style={{ fontSize: 18, fontWeight: 600 }}>{what} is {app.kind === 'mixed' ? 'playing' : 'open'}</span>
         <p style={{ opacity: 0.85, lineHeight: 1.5 }}>
-          The timer runs while {app.name} is open, even if you leave this screen. Close it to stop the clock.
+          {app.kind === 'mixed'
+            ? 'Videos use screen time while they play. Stop the video to stop the clock.'
+            : `The timer runs while ${app.name} is open, even if you leave this screen. Close it to stop the clock.`}
         </p>
       </div>
       <div className="spacer" />
@@ -233,10 +232,11 @@ function TimedApp({ app }: { app: LockableApp }) {
         className="btn btn-white"
         onClick={async () => {
           await act('closeSession');
-          navigate(homePath(me), { replace: true });
+          if (onClose) onClose();
+          else navigate(homePath(me), { replace: true });
         }}
       >
-        Close {app.name}
+        {app.kind === 'mixed' ? 'Stop the video' : `Close ${app.name}`}
       </button>
     </main>
   );
@@ -245,7 +245,7 @@ function TimedApp({ app }: { app: LockableApp }) {
 export function AppView() {
   const { appId = '' } = useParams();
   const me = useAccount();
-  const app = getApp(appId);
+  const app = appFor(me, appId);
   const navigate = useNavigate();
   const lockedAtOpen = useRef(app ? accessFor(me, app.id, Date.now()) === 'locked' && me.session?.appId !== app.id : false);
 
@@ -262,40 +262,95 @@ export function AppView() {
     );
   }
   if (lockedAtOpen.current) return null;
+  if (app.kind === 'mixed') return <MixedApp app={app} />;
   return app.kind === 'scrolls' ? <Feed app={app} /> : <TimedApp app={app} />;
+}
+
+/**
+ * The web demo of YouTube: the home feed is free, Shorts spend scrolls and a
+ * regular video spends screen time, the same split the phone's lock service makes.
+ */
+function MixedApp({ app }: { app: LockableApp }) {
+  const me = useAccount();
+  const now = useNow(1000);
+  const close = useBack('/apps');
+  const [part, setPart] = useState<'home' | 'shorts' | 'video'>(me.session?.appId === app.id ? 'video' : 'home');
+  if (part === 'shorts') return <Feed app={app} onClose={() => setPart('home')} />;
+  if (part === 'video') return <TimedApp app={app} onClose={() => setPart('home')} />;
+  const free = accessFor(me, app.id, now) === 'free';
+  return (
+    <main className="screen" style={{ background: '#0F0F0F', color: '#fff' }}>
+      <div className="app-bar" style={{ position: 'static', padding: 0 }}>
+        <button className="close-app" onClick={close}>
+          Close
+        </button>
+        <strong>{app.name}</strong>
+        <span className="scroll-meter" data-testid="mixed-meter">
+          {free ? 'Free until midnight' : `${me.scrolls} scrolls · ${minutesLeft(me, now)} min`}
+        </span>
+      </div>
+      <p style={{ opacity: 0.85, lineHeight: 1.5 }}>Browsing is free. Shorts use 1 scroll per swipe; regular videos use screen time while they play.</p>
+      <div className="stack-12">
+        <button className="btn btn-white" onClick={() => setPart('shorts')}>
+          Watch Shorts
+        </button>
+        <button className="btn btn-white" onClick={() => setPart('video')}>
+          Watch a video
+        </button>
+      </div>
+    </main>
+  );
 }
 
 /* ───────── Locked ───────── */
 
 export function Locked() {
   const { appId = '' } = useParams();
+  const [search] = useSearchParams();
   const me = useAccount();
   const data = useData();
   const now = useNow(1000);
   const navigate = useNavigate();
-  const app = getApp(appId);
+  const app = appFor(me, appId);
   if (!app) return null;
 
-  const access = accessFor(me, app.id, now);
+  // For YouTube, which part ran out: Shorts (scrolls) or videos (screen time).
+  const partParam = search.get('part');
+  const part = app.kind === 'mixed' && (partParam === 'scrolls' || partParam === 'minutes') ? partParam : null;
+  const kind = part ?? (app.kind === 'mixed' ? null : app.kind);
+  const appAccess = accessFor(me, app.id, now);
+  let access = appAccess;
+  if (part && appAccess === 'balance') {
+    const enough = part === 'scrolls' ? me.scrolls > 0 : remainingSeconds(me, now) > 0;
+    if (!enough) access = 'locked';
+  }
+  const label = part === 'scrolls' ? `${app.name} Shorts` : part === 'minutes' ? `${app.name} videos` : app.name;
+  const plural = part !== null;
+
   const parent = me.parentId ? data.accounts[me.parentId] : null;
   const open = todaysTasks(data, me.id, now).filter((t) => t.status === 'todo' || t.status === 'redo');
-  const suggested = [...open.filter((t) => t.reward.kind === app.kind), ...open.filter((t) => t.reward.kind !== app.kind)].slice(0, 3);
+  const suggested = (kind ? [...open.filter((t) => t.reward.kind === kind), ...open.filter((t) => t.reward.kind !== kind)] : open).slice(0, 3);
   const left = emergencyLeft(me, now);
   const askOpen = data.timeRequests.some((r) => r.childId === me.id && r.status === 'open');
 
   const wait = me.unlockTime ? `, or wait until ${formatClock(me.unlockTime)}` : '';
+  const earn = kind === 'scrolls' ? 'scrolls' : kind === 'minutes' ? 'minutes' : 'scrolls or minutes';
   let body: string;
-  if (parent) body = `Finish a task from ${parent.name} to earn ${app.kind === 'scrolls' ? 'scrolls' : 'minutes'}${wait}.`;
-  else if (app.kind === 'scrolls') body = `You're out of scrolls. Finish a task to earn more${wait}.`;
-  else body = `Your screen time is used up. Finish a task to earn more minutes${wait}.`;
+  if (parent) body = `Finish a task from ${parent.name} to earn ${earn}${wait}.`;
+  else if (kind === 'scrolls') body = `You're out of scrolls. Finish a task to earn more${wait}.`;
+  else if (kind === 'minutes') body = `Your screen time is used up. Finish a task to earn more minutes${wait}.`;
+  else body = `You're out of scrolls and screen time. Finish a task to earn more${wait}.`;
+  // YouTube itself still opens when only one part ran out.
+  if (part === 'scrolls' && appAccess === 'balance') body += ' Regular videos still play on your screen time.';
+  if (part === 'minutes' && appAccess === 'balance') body += ' Shorts still work with your scrolls.';
 
   return (
     <main className="screen centered">
       <div className="stack center" style={{ gap: 16 }}>
         <div className="icon-badge">
-          {app.kind === 'scrolls' ? <LockIcon size={32} color="#15803D" /> : <TimerIcon size={32} color="#15803D" />}
+          {kind === 'minutes' ? <TimerIcon size={32} color="#15803D" /> : <LockIcon size={32} color="#15803D" />}
         </div>
-        <h1 className="h1">{access === 'locked' ? `${app.name} is locked` : `${app.name} is open`}</h1>
+        <h1 className="h1">{access === 'locked' ? `${label} ${plural ? 'are' : 'is'} locked` : `${app.name} is open`}</h1>
         <p className="lead">{access === 'locked' ? body : 'You have enough to open it now.'}</p>
       </div>
       {access === 'locked' &&
@@ -314,9 +369,16 @@ export function Locked() {
       <div className="spacer" />
       <div className="actions" style={{ gap: parent ? 10 : 16 }}>
         {access === 'locked' ? (
-          <Link to={homePath(me)} className="btn btn-primary">
-            See my tasks
-          </Link>
+          <>
+            <Link to={homePath(me)} className="btn btn-primary">
+              See my tasks
+            </Link>
+            {part && appAccess === 'balance' && (
+              <button className="btn btn-secondary" onClick={() => void launch(app, navigate, true)}>
+                {part === 'scrolls' ? `Watch videos on ${app.name}` : `Open ${app.name}`}
+              </button>
+            )}
+          </>
         ) : (
           <button className="btn btn-primary" onClick={() => void launch(app, navigate, true)}>
             Open {app.name}
@@ -354,7 +416,7 @@ export function Emergency() {
   const { appId = '' } = useParams();
   const me = useAccount();
   const navigate = useNavigate();
-  const app = getApp(appId);
+  const app = appFor(me, appId);
   const [startedAt] = useState(() => Date.now());
   const now = useNow(200);
   if (!app) return null;
@@ -365,7 +427,7 @@ export function Emergency() {
   const progress = 1 - secondsLeft / EMERGENCY_WAIT_SECONDS;
   const r = 90;
   const c = 2 * Math.PI * r;
-  const grant = app.kind === 'scrolls' ? `${EMERGENCY_SCROLLS} scrolls` : `${EMERGENCY_MINUTES} minutes`;
+  const grant = [usesScrolls(app) && `${EMERGENCY_SCROLLS} scrolls`, usesMinutes(app) && `${EMERGENCY_MINUTES} minutes`].filter(Boolean).join(' and ');
 
   return (
     <main className="screen centered">

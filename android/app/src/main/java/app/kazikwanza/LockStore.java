@@ -25,6 +25,8 @@ final class LockStore {
 
     static final String KIND_SCROLLS = "scrolls";
     static final String KIND_MINUTES = "minutes";
+    /** YouTube: swiping through Shorts spends scrolls, watching a regular video spends screen time. */
+    static final String KIND_MIXED = "mixed";
 
     private static final String PREFS = "kazikwanza_lock";
     private static final String KEY_STATE = "state";
@@ -142,11 +144,13 @@ final class LockStore {
     }
 
     /**
-     * Records usage. Swipes or seconds from the same visit to an app are added
-     * to one event while the app hasn't read it yet, so history stays short.
+     * Records usage: {@code kind} is {@link #KIND_SCROLLS} (swipes) or
+     * {@link #KIND_MINUTES} (seconds). Usage of the same kind from the same visit
+     * to an app is added to one event while the app hasn't read it yet, so
+     * history stays short.
      */
-    synchronized void spend(LockedApp app, String session, double amount, long now) {
-        if (amount <= 0) return;
+    synchronized void spend(LockedApp app, String kind, String session, double amount, long now) {
+        if (amount <= 0 || !(KIND_SCROLLS.equals(kind) || KIND_MINUTES.equals(kind))) return;
         try {
             JSONObject last = events.isEmpty() ? null : events.get(events.size() - 1);
             if (
@@ -154,7 +158,7 @@ final class LockStore {
                 last.getLong("seq") > drainedSeq &&
                 session.equals(last.optString("session")) &&
                 app.id.equals(last.optString("appId")) &&
-                app.kind.equals(last.optString("kind"))
+                kind.equals(last.optString("kind"))
             ) {
                 last.put("amount", last.getDouble("amount") + amount);
                 last.put("endAt", now);
@@ -162,7 +166,7 @@ final class LockStore {
                 JSONObject e = new JSONObject();
                 e.put("seq", nextSeq++);
                 e.put("appId", app.id);
-                e.put("kind", app.kind);
+                e.put("kind", kind);
                 e.put("amount", amount);
                 e.put("session", session);
                 e.put("at", now);

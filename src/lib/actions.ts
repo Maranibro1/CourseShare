@@ -4,7 +4,7 @@
  * applies an action as the signed-in account, never as an id the client sends.
  * Arguments arrive as untrusted JSON, so each action checks their shape.
  */
-import { APPS, getApp } from './apps';
+import { MAX_LOCKED_APPS, MAX_PHONE_APPS, isValidAppId, normalizePhoneApps } from './apps';
 import {
   KaziError,
   addChildTask,
@@ -81,15 +81,28 @@ function clock(v: unknown): string | null {
   return s;
 }
 
+/** A listed app's id, or "pkg:" and the package name of an app found on the phone. */
 function appId(v: unknown): string {
-  const s = id(v);
-  if (!getApp(s)) bad();
+  const s = str(v, 160);
+  if (!isValidAppId(s)) bad();
   return s;
 }
 
 function appIds(v: unknown): string[] {
-  if (!Array.isArray(v) || v.length > APPS.length) bad();
+  if (!Array.isArray(v) || v.length > MAX_LOCKED_APPS) bad();
   return [...new Set((v as unknown[]).map(appId))];
+}
+
+/** The installed-apps list a phone reports. */
+function phoneApps(v: unknown) {
+  if (!Array.isArray(v) || v.length > MAX_PHONE_APPS * 2) bad();
+  return normalizePhoneApps(
+    (v as unknown[]).map((x) => {
+      const o = x as Record<string, unknown>;
+      if (!o || typeof o !== 'object') bad();
+      return { pkg: str(o.pkg, 150), name: str(o.name, 200) };
+    }),
+  );
 }
 
 const REWARD_KINDS: RewardKind[] = ['scrolls', 'minutes'];
@@ -162,6 +175,10 @@ function updateProfile(data: AppData, actor: string, args: Record<string, unknow
       case 'lockedApps':
         if (linkedChild) throw new KaziError('Your parent sets which apps are locked');
         out.lockedApps = appIds(value);
+        break;
+      case 'phoneApps':
+        // A child's phone reports its apps too, so their parent can put limits on them.
+        out.phoneApps = phoneApps(value);
         break;
       case 'unlockTime':
         if (linkedChild) throw new KaziError('Your parent sets your unlock time');

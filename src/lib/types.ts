@@ -23,6 +23,14 @@ export interface LedgerEntry {
   unit: RewardKind;
   /** Exact seconds behind a screen-time line recorded by the phone. */
   seconds?: number;
+  /** The app a spending line was for. */
+  appId?: string;
+}
+
+/** An app the phone reported as installed: its package name and the name on its icon. */
+export interface PhoneApp {
+  pkg: string;
+  name: string;
 }
 
 export interface ActiveSession {
@@ -64,6 +72,8 @@ export interface Account {
   timeZone?: string;
   /** Secret part of this account's live-update channel name. Only ever sent to the account itself. */
   notifyKey?: string;
+  /** Apps installed on this person's phone, so they (or their parent) can give any of them a screen-time limit. */
+  phoneApps?: PhoneApp[];
 }
 
 export interface Task {

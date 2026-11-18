@@ -1395,6 +1395,38 @@ p {
   position: relative;
 }
 
+.app-row .app-icon {
+  flex-shrink: 0;
+}
+
+.app-icon img {
+  display: block;
+  border-radius: inherit;
+}
+
+.app-row {
+  gap: 12px;
+  min-height: 56px;
+}
+
+.app-row .app-icon .lock {
+  display: none;
+}
+
+.app-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.app-row-body > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-icon .lock {
   position: absolute;
   right: -4px;

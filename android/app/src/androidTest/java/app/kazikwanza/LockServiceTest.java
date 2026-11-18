@@ -30,7 +30,8 @@ import org.junit.runner.RunWith;
 /**
  * Runs the real lock service on a phone (an emulator in CI) against stand-in
  * apps that have the same package names and the same kinds of lists as
- * TikTok, YouTube Shorts, Instagram, Facebook, X and Minecraft.
+ * TikTok, YouTube (home feed, Shorts and videos), Instagram (feed and Reels),
+ * Facebook, X and Minecraft.
  */
 @RunWith(AndroidJUnit4.class)
 public class LockServiceTest {
@@ -92,7 +93,7 @@ public class LockServiceTest {
     private void rules(long scrolls, double seconds, String unlockTime) throws JSONException {
         JSONArray apps = new JSONArray()
             .put(app("tiktok", "scrolls", TIKTOK))
-            .put(app("youtube", "scrolls", YOUTUBE))
+            .put(app("youtube", "mixed", YOUTUBE))
             .put(app("instagram", "scrolls", INSTAGRAM))
             .put(app("facebook", "scrolls", FACEBOOK))
             .put(app("x", "scrolls", X))
@@ -124,6 +125,15 @@ public class LockServiceTest {
         return found != null && found;
     }
 
+    /** Taps a tab in the YouTube or Instagram stand-in, then waits for the lock service's next look at the screen. */
+    private void tab(String name) {
+        UiObject2 t = device.wait(Until.findObject(By.text(name)), 5_000);
+        assertTrue(name + " tab shown", t != null);
+        t.click();
+        // One check of the screen a second, plus the pause after a part of the app opens.
+        SystemClock.sleep(2_000);
+    }
+
     /** One swipe up to the next post, then a pause so the next swipe is a new gesture. */
     private void swipeUp() {
         int w = device.getDisplayWidth();
@@ -146,15 +156,102 @@ public class LockServiceTest {
         assertTrue("still in TikTok", inFront(TIKTOK, 1_000));
     }
 
+    /* ───────── YouTube: Shorts cost scrolls, videos cost screen time, browsing is free ───────── */
+
     @Test
-    public void youtubeShortsLocksWhenScrollsRunOut() throws Exception {
-        rules(2, 0, "");
+    public void youtubeHomeFeedIsFree() throws Exception {
+        rules(5, 60, "");
         open(YOUTUBE);
+        // The home feed scrolls past a small Shorts shelf; neither costs anything.
+        swipeUp();
+        swipeUp();
+        swipeUp();
+        assertEquals(5, store.scrollsLeft());
+        assertEquals(60, store.secondsLeft(), 0.001);
+        assertTrue("still in YouTube", inFront(YOUTUBE, 1_000));
+    }
+
+    @Test
+    public void youtubeShortsSpendOneScrollPerSwipe() throws Exception {
+        rules(5, 60, "");
+        open(YOUTUBE);
+        tab("Shorts");
+        swipeUp();
+        swipeUp();
+        assertEquals(3, store.scrollsLeft());
+        assertEquals("Shorts don't use screen time", 60, store.secondsLeft(), 0.001);
+    }
+
+    @Test
+    public void youtubeShortsLockWhenScrollsRunOut() throws Exception {
+        rules(2, 60, "");
+        open(YOUTUBE);
+        tab("Shorts");
         swipeUp();
         swipeUp();
         assertEquals(0, store.scrollsLeft());
         swipeUp();
         assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
+    }
+
+    @Test
+    public void youtubeVideosSpendScreenTimeAndCommentsAreFree() throws Exception {
+        rules(5, 60, "");
+        open(YOUTUBE);
+        tab("Video");
+        SystemClock.sleep(3_000);
+        swipeUp(); // the comments under the video
+        device.pressHome();
+        SystemClock.sleep(1_500);
+        double left = store.secondsLeft();
+        // Watched for about 6-7 s: from spotting the player (within 1 s of the tap) until Home.
+        assertTrue("charged about 5-9 seconds, left " + left, left > 50 && left < 56);
+        assertEquals("videos don't use scrolls", 5, store.scrollsLeft());
+    }
+
+    @Test
+    public void youtubeVideosLockWhenScreenTimeRunsOut() throws Exception {
+        rules(5, 2, "");
+        open(YOUTUBE);
+        tab("Video");
+        assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 15_000));
+        assertEquals(0, store.secondsLeft(), 0.001);
+        assertEquals(5, store.scrollsLeft());
+    }
+
+    @Test
+    public void youtubeWithOnlyScreenTimePlaysVideosButLocksShorts() throws Exception {
+        rules(0, 60, "");
+        open(YOUTUBE);
+        assertTrue("YouTube opens", inFront(YOUTUBE, 1_000));
+        tab("Video");
+        assertTrue("videos play", inFront(YOUTUBE, 1_000));
+        tab("Shorts");
+        assertTrue("Kazikwanza's lock screen opened for Shorts", inFront(SELF, 10_000));
+    }
+
+    @Test
+    public void youtubeLocksStraightAwayWithNothingLeft() throws Exception {
+        rules(0, 0, "");
+        Intent intent = context.getPackageManager().getLaunchIntentForPackage(YOUTUBE);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        context.startActivity(intent);
+        assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
+    }
+
+    /* ───────── Instagram: feed posts and Reels both cost scrolls ───────── */
+
+    @Test
+    public void instagramCountsFeedPostsAndReels() throws Exception {
+        rules(10, 0, "");
+        open(INSTAGRAM);
+        swipeUp();
+        swipeUp();
+        assertEquals("feed posts", 8, store.scrollsLeft());
+        tab("Reels");
+        swipeUp();
+        swipeUp();
+        assertEquals("reels", 6, store.scrollsLeft());
     }
 
     @Test
@@ -209,6 +306,49 @@ public class LockServiceTest {
         SystemClock.sleep(2_500);
         swipeUp();
         assertEquals(5, store.scrollsLeft());
+    }
+
+    /* ───────── Every app on the phone ───────── */
+
+    @Test
+    public void findsTheAppsOnThePhoneButNeverThePhoneAppOrSettings() throws Exception {
+        JSONArray apps = KaziLockPlugin.installedApps(context);
+        java.util.Set<String> pkgs = new java.util.HashSet<>();
+        for (int i = 0; i < apps.length(); i++) {
+            JSONObject a = apps.getJSONObject(i);
+            pkgs.add(a.getString("pkg"));
+            assertTrue("has a name", !a.getString("name").isEmpty());
+        }
+        assertTrue("found the stand-in apps", pkgs.contains(TIKTOK) && pkgs.contains(MINECRAFT));
+        assertTrue("has icons", apps.getJSONObject(0).optString("icon").startsWith("data:image/png;base64,"));
+        String dialer = dialerPackage();
+        if (dialer != null) assertTrue("never offers the phone app", !pkgs.contains(dialer));
+        assertTrue("never offers Settings", !pkgs.contains("com.android.settings"));
+        assertTrue("never offers itself", !pkgs.contains(SELF));
+    }
+
+    @Test
+    public void thePhoneAppIsNeverLocked() throws Exception {
+        String dialer = dialerPackage();
+        if (dialer == null) return; // No phone app on this image.
+        store.sync(
+            new JSONObject()
+                .put("enabled", true)
+                .put("apps", new JSONArray().put(app("phone", "minutes", dialer)))
+                .put("scrolls", 0)
+                .put("screenSeconds", 0)
+                .put("unlockTime", "")
+                .put("ackSeq", Long.MAX_VALUE)
+        );
+        context.startActivity(new Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        assertTrue("the phone app opened", inFront(dialer, 10_000));
+        SystemClock.sleep(3_000);
+        assertTrue("and stayed open", inFront(dialer, 1_000));
+    }
+
+    private static String dialerPackage() {
+        android.content.pm.ResolveInfo info = context.getPackageManager().resolveActivity(new Intent(Intent.ACTION_DIAL), 0);
+        return info == null || info.activityInfo == null || "android".equals(info.activityInfo.packageName) ? null : info.activityInfo.packageName;
     }
 
     /* ───────── Screen time ───────── */

@@ -7,13 +7,19 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Rect;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -22,13 +28,17 @@ import java.util.Set;
  * Watches which app is in front and enforces the rules in {@link LockStore}:
  *
  * <ul>
- *   <li>Scrolling apps (TikTok, Instagram, Facebook, YouTube and Shorts, X) spend 1 scroll per swipe up or down.</li>
+ *   <li>Scrolling apps (TikTok, Instagram feed and Reels, Facebook, X) spend 1 scroll per swipe up or down.</li>
+ *   <li>YouTube is split: swiping through Shorts spends scrolls, a regular video spends screen time while
+ *       it's on screen, and browsing the home feed is free.</li>
  *   <li>Other locked apps spend screen-time seconds while they are on screen.</li>
  *   <li>With nothing left, the app is sent home and Kazikwanza's lock screen opens.</li>
  * </ul>
  *
- * It never reads the content of other apps: it only uses the package name of
- * the window in front and the fact that a list scrolled.
+ * It never reads what people write, watch or post. It uses the package name of
+ * the window in front, the fact that a list scrolled, and, inside YouTube
+ * only, the names of the views on screen (such as YouTube's Shorts player) to
+ * tell Shorts from videos.
  */
 public class KaziAccessibilityService extends AccessibilityService {
 
@@ -45,12 +55,48 @@ public class KaziAccessibilityService extends AccessibilityService {
     private static final long HOME_SETTLE_MS = 400;
     private static final String TAG = "KaziLock";
 
+    /* ───────── Telling YouTube's Shorts from its videos ───────── */
+
+    static final int PART_BROWSE = 0;
+    static final int PART_SHORTS = 1;
+    static final int PART_VIDEO = 2;
+
+    /**
+     * View ids of YouTube's full-screen Shorts player, from current and recent
+     * versions of the app. Some of them also appear in the small Shorts shelf
+     * on the home feed, so a match only counts when the view fills most of the
+     * window ({@link #SHORTS_MIN_COVER}).
+     */
+    static final Set<String> SHORTS_IDS = new HashSet<>(Arrays.asList(
+        "reel_player_page_container",
+        "reel_watch_player",
+        "reel_watch_fragment_root",
+        "reel_recycler",
+        "shorts_video_pager",
+        "shorts_player",
+        "shorts_player_view",
+        "reel_player_underlay"
+    ));
+    static final float SHORTS_MIN_COVER = 0.7f;
+
+    /** View ids of YouTube's regular video player, which sits across the top of the watch page or fills the screen. */
+    static final Set<String> VIDEO_IDS = new HashSet<>(Arrays.asList(
+        "watch_player",
+        "player_fragment_container",
+        "watch_while_player"
+    ));
+    static final float VIDEO_MIN_COVER = 0.15f;
+    /** Enough to cover YouTube's view tree; stops a runaway walk. */
+    private static final int MAX_NODES = 3_000;
+
     /** True while Android has the service running. */
     static volatile boolean running;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private LockStore store;
     private final Set<String> ignoredPackages = new HashSet<>();
+    /** Packages that are never locked: see {@link SafeApps}. */
+    private Set<String> safePackages = new HashSet<>();
 
     private String foreground;
     private String session = "";
@@ -62,11 +108,18 @@ public class KaziAccessibilityService extends AccessibilityService {
     private LockStore.LockedApp timingApp;
     private long lastLockAt;
 
+    /** The YouTube-style app in front, while it is, and which part of it is on screen. */
+    private LockStore.LockedApp mixedApp;
+    private int part = PART_BROWSE;
+    private long partSince;
+
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
             onTick();
-            if (timingApp != null) handler.postDelayed(this, TICK_MS);
+            // onTick may have scheduled the next tick already (a video started); keep just one.
+            handler.removeCallbacks(this);
+            if (timingApp != null || mixedApp != null) handler.postDelayed(this, TICK_MS);
         }
     };
 
@@ -76,6 +129,7 @@ public class KaziAccessibilityService extends AccessibilityService {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                 // Nobody is playing with the screen off; stop the clock.
                 stopTiming();
+                stopWatching();
                 foreground = null;
             } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
                 String pkg = currentPackageFromUsageStats();
@@ -90,6 +144,7 @@ public class KaziAccessibilityService extends AccessibilityService {
         store = LockStore.get(this);
         ignoredPackages.add("com.android.systemui");
         ignoredPackages.add("android");
+        safePackages = SafeApps.packages(this);
         refreshKeyboards();
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -126,6 +181,7 @@ public class KaziAccessibilityService extends AccessibilityService {
     public void onDestroy() {
         running = false;
         stopTiming();
+        stopWatching();
         try {
             unregisterReceiver(screenReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -139,70 +195,193 @@ public class KaziAccessibilityService extends AccessibilityService {
     private void onForeground(String pkg) {
         if (pkg.equals(foreground)) return;
         stopTiming();
+        stopWatching();
         foreground = pkg;
         foregroundSince = System.currentTimeMillis();
         session = pkg + ":" + foregroundSince;
         lastScrollAt = 0;
         refreshKeyboards();
 
-        LockStore.LockedApp app = store.appFor(pkg);
-        if (app == null || pkg.equals(getPackageName())) return;
+        LockStore.LockedApp app = lockedApp(pkg);
+        if (app == null) return;
         long now = System.currentTimeMillis();
         if (store.freeNow(now)) return;
 
-        if (LockStore.KIND_SCROLLS.equals(app.kind)) {
-            if (store.scrollsLeft() <= 0) lock(app);
-        } else if (store.secondsLeft() <= 0) {
-            lock(app);
-        } else {
-            timingApp = app;
-            timingSince = now;
+        if (LockStore.KIND_MIXED.equals(app.kind)) {
+            // YouTube opens while either balance is left; each part is checked as it comes on screen.
+            if (store.scrollsLeft() <= 0 && store.secondsLeft() <= 0) {
+                lock(app, null);
+                return;
+            }
+            mixedApp = app;
+            part = PART_BROWSE;
+            partSince = now;
+            handler.removeCallbacks(tick);
             handler.postDelayed(tick, TICK_MS);
+        } else if (LockStore.KIND_SCROLLS.equals(app.kind)) {
+            if (store.scrollsLeft() <= 0) lock(app, LockStore.KIND_SCROLLS);
+        } else if (store.secondsLeft() <= 0) {
+            lock(app, LockStore.KIND_MINUTES);
+        } else {
+            startTiming(app, now);
         }
     }
 
     private void onScroll(String pkg) {
-        LockStore.LockedApp app = store.appFor(pkg);
-        if (app == null || !LockStore.KIND_SCROLLS.equals(app.kind)) return;
+        LockStore.LockedApp app = lockedApp(pkg);
+        if (app == null) return;
+        boolean mixed = LockStore.KIND_MIXED.equals(app.kind);
+        if (!mixed && !LockStore.KIND_SCROLLS.equals(app.kind)) return;
         long now = System.currentTimeMillis();
         if (now - foregroundSince < OPEN_GRACE_MS) return;
         boolean newGesture = now - lastScrollAt > GESTURE_GAP_MS;
         lastScrollAt = now;
         if (!newGesture || store.freeNow(now)) return;
+        if (mixed) {
+            // Scrolling the home feed or a video's comments is free; only Shorts cost scrolls.
+            if (mixedApp == null) return;
+            setPart(detectPart(), now);
+            if (part != PART_SHORTS || now - partSince < OPEN_GRACE_MS) return;
+        }
         if (store.scrollsLeft() <= 0) {
-            lock(app);
+            lock(app, LockStore.KIND_SCROLLS);
             return;
         }
-        store.spend(app, session, 1, now);
+        store.spend(app, LockStore.KIND_SCROLLS, session, 1, now);
+    }
+
+    /** The rule for a package, or null when it isn't locked (or must never be). */
+    private LockStore.LockedApp lockedApp(String pkg) {
+        if (pkg == null || safePackages.contains(pkg)) return null;
+        return store.appFor(pkg);
+    }
+
+    /* ───────── YouTube ───────── */
+
+    /** Moves to another part of a YouTube-style app: starts or stops the clock, or locks. */
+    private void setPart(int next, long now) {
+        if (mixedApp == null || next == part) return;
+        part = next;
+        partSince = now;
+        if (part != PART_VIDEO) stopTiming();
+        if (part == PART_SHORTS && store.scrollsLeft() <= 0) {
+            lock(mixedApp, LockStore.KIND_SCROLLS);
+        } else if (part == PART_VIDEO) {
+            if (store.secondsLeft() <= 0) lock(mixedApp, LockStore.KIND_MINUTES);
+            else startTiming(mixedApp, now);
+        }
+    }
+
+    private void stopWatching() {
+        mixedApp = null;
+        part = PART_BROWSE;
+    }
+
+    /** Looks at the views on screen to tell Shorts, a regular video and browsing apart. */
+    private int detectPart() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return part;
+        List<AccessibilityNodeInfo> seen = new ArrayList<>();
+        try {
+            if (mixedApp == null || root.getPackageName() == null || !root.getPackageName().toString().equals(foreground)) return part;
+            Rect window = new Rect();
+            root.getBoundsInScreen(window);
+            if (window.height() <= 0 || window.width() <= 0) return part;
+            boolean shorts = false;
+            boolean video = false;
+            boolean tallSurface = false;
+            boolean wideSurface = false;
+            Rect r = new Rect();
+            ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+            queue.add(root);
+            while (!queue.isEmpty() && seen.size() < MAX_NODES) {
+                AccessibilityNodeInfo node = queue.poll();
+                seen.add(node);
+                // Everything inside a hidden view is hidden too.
+                if (node != root && !node.isVisibleToUser()) continue;
+                node.getBoundsInScreen(r);
+                if (!r.intersect(window)) continue;
+                float cover = r.height() / (float) window.height();
+                String name = idName(node.getViewIdResourceName());
+                if (name != null) {
+                    if (SHORTS_IDS.contains(name) && cover >= SHORTS_MIN_COVER) shorts = true;
+                    else if (VIDEO_IDS.contains(name) && cover >= VIDEO_MIN_COVER) video = true;
+                }
+                CharSequence cls = node.getClassName();
+                if (cls != null && (cls.toString().endsWith("SurfaceView") || cls.toString().endsWith("TextureView"))) {
+                    boolean portrait = window.height() > window.width();
+                    if (portrait && cover >= SHORTS_MIN_COVER) tallSurface = true;
+                    else if (r.width() >= window.width() * 0.9f && cover >= VIDEO_MIN_COVER) wideSurface = true;
+                }
+                for (int i = 0; i < node.getChildCount(); i++) {
+                    AccessibilityNodeInfo child = node.getChild(i);
+                    if (child != null) queue.add(child);
+                }
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) seen.addAll(queue);
+            if (shorts) return PART_SHORTS;
+            if (video) return PART_VIDEO;
+            // If YouTube renames its views: a full-height video in portrait is a Short, and a
+            // full-width video playing with sound is a regular video.
+            if (tallSurface) return PART_SHORTS;
+            if (wideSurface && isMusicPlaying()) return PART_VIDEO;
+            return PART_BROWSE;
+        } finally {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                if (!seen.contains(root)) root.recycle();
+                for (AccessibilityNodeInfo n : seen) n.recycle();
+            }
+        }
+    }
+
+    /** "com.google.android.youtube:id/reel_recycler" → "reel_recycler". */
+    static String idName(String resourceName) {
+        if (resourceName == null) return null;
+        int at = resourceName.indexOf(":id/");
+        return at < 0 ? null : resourceName.substring(at + 4);
+    }
+
+    private boolean isMusicPlaying() {
+        AudioManager audio = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        return audio != null && audio.isMusicActive();
     }
 
     /* ───────── Screen time ───────── */
 
+    private void startTiming(LockStore.LockedApp app, long now) {
+        timingApp = app;
+        timingSince = now;
+        handler.removeCallbacks(tick);
+        handler.postDelayed(tick, TICK_MS);
+    }
+
     private void onTick() {
-        if (timingApp == null) return;
         long now = System.currentTimeMillis();
         if (store.freeNow(now)) {
             // The unlock time arrived while playing: charge up to now, then stop.
             stopTiming();
+            stopWatching();
             return;
         }
+        if (mixedApp != null) setPart(detectPart(), now);
+        if (timingApp == null) return;
         double running = (now - timingSince) / 1000.0;
         if (store.secondsLeft() - running <= 0) {
             LockStore.LockedApp app = timingApp;
             stopTiming();
-            lock(app);
+            lock(app, LockStore.KIND_MINUTES);
         } else if (now - timingSince >= FLUSH_MS) {
-            store.spend(timingApp, session, running, now);
+            store.spend(timingApp, LockStore.KIND_MINUTES, session, running, now);
             timingSince = now;
         }
     }
 
     private void stopTiming() {
-        handler.removeCallbacks(tick);
+        if (mixedApp == null) handler.removeCallbacks(tick);
         if (timingApp != null && store != null) {
             long now = System.currentTimeMillis();
             double used = Math.min((now - timingSince) / 1000.0, store.secondsLeft());
-            store.spend(timingApp, session, used, now);
+            store.spend(timingApp, LockStore.KIND_MINUTES, session, used, now);
         }
         timingApp = null;
         timingSince = 0;
@@ -210,11 +389,14 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     /* ───────── Locking ───────── */
 
-    private void lock(LockStore.LockedApp app) {
+    /** {@code kind} says what ran out, for YouTube's lock screen: Shorts (scrolls) or videos (minutes). */
+    private void lock(LockStore.LockedApp app, String kind) {
         long now = System.currentTimeMillis();
         if (now - lastLockAt < LOCK_COOLDOWN_MS) return;
         lastLockAt = now;
-        Log.i(TAG, "Locking " + app.id);
+        Log.i(TAG, "Locking " + app.id + (kind == null ? "" : " (" + kind + ")"));
+        stopTiming();
+        stopWatching();
         // Leave the locked app first. Going home finishes on its own schedule, so the lock
         // screen opens a moment later; opening both at once can leave the home screen on top.
         performGlobalAction(GLOBAL_ACTION_HOME);
@@ -222,6 +404,7 @@ public class KaziAccessibilityService extends AccessibilityService {
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra(MainActivity.EXTRA_LOCKED_APP, app.id);
+            if (kind != null && LockStore.KIND_MIXED.equals(app.kind)) intent.putExtra(MainActivity.EXTRA_LOCKED_KIND, kind);
             startActivity(intent);
         }, HOME_SETTLE_MS);
     }

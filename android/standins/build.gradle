@@ -27,19 +27,22 @@ android {
             buildConfigField "String", "LAYOUT", '"pager"'
             resValue "string", "app_name", "TikTok (test)"
         }
+        // Home feed with a small Shorts shelf, a full-screen Shorts player and a video page,
+        // using the view ids of YouTube's own Shorts player and video player.
         youtube {
             dimension "app"
             applicationId "com.google.android.youtube"
-            buildConfigField "String", "LAYOUT", '"pager"'
-            resValue "string", "app_name", "YouTube Shorts (test)"
+            buildConfigField "String", "LAYOUT", '"youtube"'
+            resValue "string", "app_name", "YouTube (test)"
         }
-        // Scrolling feed with a sideways story tray at the top.
+        // Feed with a story tray, plus a Reels tab with a full-screen vertical pager.
         instagram {
             dimension "app"
             applicationId "com.instagram.android"
-            buildConfigField "String", "LAYOUT", '"feed"'
+            buildConfigField "String", "LAYOUT", '"instagram"'
             resValue "string", "app_name", "Instagram (test)"
         }
+        // Scrolling feed with a sideways story tray at the top.
         facebook {
             dimension "app"
             applicationId "com.facebook.katana"

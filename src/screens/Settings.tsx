@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ChevronIcon } from '../components/Icons';
 import { InstallCard } from '../components/Install';
 import { Avatar, BackButton, NavScreen, Sheet, Toggle } from '../components/ui';
-import { SCROLL_APPS, TIME_APPS } from '../lib/apps';
+import { AppList } from '../components/AppList';
 import { setDeviceOwner, useDeviceOwner } from '../lib/device';
 import { findAccountByContact, freeUnlockActive, requestsFor } from '../lib/logic';
 import { KaziLock, isNativeAndroid, pumpNative, useLockStatus } from '../lib/native';
@@ -60,20 +60,6 @@ export function Settings() {
     void act('updateProfile', { patch: { lockedApps: next } });
   }
 
-  const group = (title: string, apps: LockableApp[]) => (
-    <div className="stack">
-      <span className="eyebrow" style={{ paddingBottom: 4 }}>
-        {title}
-      </span>
-      {apps.map((a) => (
-        <div className="row" key={a.id}>
-          <span>{a.name}</span>
-          <Toggle on={me.lockedApps.includes(a.id)} label={`Lock ${a.name}`} onChange={(on) => toggleApp(a, on)} />
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <NavScreen>
       <div className="topbar">
@@ -88,8 +74,7 @@ export function Settings() {
         </button>
         <button onClick={() => navigate('/family')}>Family</button>
       </div>
-      {group('Scrolling apps · use scrolls', SCROLL_APPS)}
-      {group('Other apps · use screen time', TIME_APPS)}
+      <AppList owner={me} isOn={(id) => me.lockedApps.includes(id)} onToggle={toggleApp} />
       <div className="stack">
         <span className="eyebrow" style={{ paddingBottom: 4 }}>
           Rules

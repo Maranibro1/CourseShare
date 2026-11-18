@@ -5,5 +5,5 @@
     <string name="package_name">app.kazikwanza</string>
     <string name="custom_url_scheme">app.kazikwanza</string>
     <string name="accessibility_label">Kazikwanza app lock</string>
-    <string name="accessibility_description">Kazikwanza checks which app is open so it can lock TikTok, Instagram and other apps you chose, and counts each swipe in those apps as one scroll. It never reads your messages, posts or what you watch.</string>
+    <string name="accessibility_description">Kazikwanza checks which app is open so it can lock the apps you chose. It counts each swipe in TikTok, Instagram, Facebook and X as one scroll, and in YouTube it looks at which screen is open (Shorts, a video or the home feed) so Shorts use scrolls and videos use screen time. It never reads your messages, posts or what you watch.</string>
 </resources>
