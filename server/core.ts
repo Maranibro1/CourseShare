@@ -12,8 +12,10 @@
  * The session token arrives in the X-Kazi-Token header (or Authorization: Bearer).
  */
 import { applyAction, isActionName } from '../src/lib/actions';
-import { KaziError, canApprove, childrenOf, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
+import { KaziError, applyClaudeVerdict, canApprove, childrenOf, claudeCanCheck, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
+import { questionsFor } from '../src/lib/questions';
 import { isValidTimeZone, withTimeZone } from '../src/lib/time';
+import type { ClaudeChecker, Verdict } from './claude';
 import type { AppData } from '../src/lib/types';
 import { viewFor } from '../src/lib/view';
 import { ConflictError, TakenError, affectedBy, diff, isEmpty, type Repo } from './repo';
@@ -27,6 +29,8 @@ export interface CoreOptions {
   now?: () => number;
   /** PBKDF2 rounds for new passwords; lower only in tests. */
   passwordRounds?: number;
+  /** Claude, for checking proof. Without it, Claude tasks are off and answers are taken on trust. */
+  claude?: ClaudeChecker | null;
 }
 
 export class HttpError extends Error {
@@ -202,6 +206,7 @@ export function createCore(options: CoreOptions) {
   const failedLogins = new RateLimiter(10, 15 * 60_000);
   const actionLimiter = new RateLimiter(600, 60_000);
   const messageLimiter = new RateLimiter(30, 60_000);
+  const claudeLimiter = new RateLimiter(6, 60_000);
 
   const zoneOf = (data: AppData, id: string) => data.accounts[id]?.timeZone ?? defaultZone;
 
@@ -349,6 +354,10 @@ export function createCore(options: CoreOptions) {
     if (!actionLimiter.allow(me)) throw new HttpError(429, 'Slow down a little and try again.');
     if (name === 'sendMessage' && !messageLimiter.allow(me)) throw new HttpError(429, 'You’re sending messages very fast. Wait a moment.');
     const args = (body.args ?? {}) as Record<string, unknown>;
+    if (name === 'submitPhoto' || name === 'completeWithQuestions') {
+      const viaClaude = await claudeAction(me, name, args);
+      if (viaClaude) return viaClaude;
+    }
     const code = name === 'joinFamily' && typeof args.code === 'string' ? args.code : undefined;
     const out = await transact(me, (d) => withTimeZone(zoneOf(d, me), () => applyAction(d, me, name, args, now())), code);
     // Photos are only needed until the task has been checked.
@@ -364,13 +373,70 @@ export function createCore(options: CoreOptions) {
     });
   }
 
+  /**
+   * Proof that Claude checks: a photo for a Claude task, or question answers
+   * when Claude is set up. Claude is asked first, then its verdict is saved.
+   * Returns null when the action isn't one for Claude.
+   */
+  async function claudeAction(me: string, name: 'submitPhoto' | 'completeWithQuestions', args: Record<string, unknown>): Promise<Response | null> {
+    const taskId = typeof args.taskId === 'string' ? args.taskId : '';
+    const { data } = await repo.load(me);
+    const task0 = data.tasks[taskId];
+    if (!task0) return null;
+    const kind = name === 'submitPhoto' ? 'photo' : 'answers';
+    if (kind === 'photo' && task0.verify !== 'claude') return null;
+    if (kind === 'answers' && (task0.verify !== 'questions' || !options.claude)) return null;
+    const claude = options.claude;
+    if (!claude) throw new HttpError(400, 'Claude isn’t set up on this server yet. Edit the task to use a verifier or questions.');
+    let answers: string[] | null = null;
+    if (kind === 'answers') {
+      if (!Array.isArray(args.answers) || args.answers.length !== 3 || args.answers.some((a) => typeof a !== 'string' || a.length > 2000)) {
+        throw new HttpError(400, 'Answer every question');
+      }
+      answers = args.answers as string[];
+      if (answers.some((a) => a.trim().length < 3)) throw new HttpError(400, 'Answer every question');
+    }
+    const zone = zoneOf(data, me);
+    withTimeZone(zone, () => claudeCanCheck(data, taskId, me, kind, now()));
+    if (!claudeLimiter.allow(me)) throw new HttpError(429, 'Slow down a little and try again.');
+
+    let verdict: Verdict;
+    try {
+      if (kind === 'photo') {
+        const bytes = await repo.getPhoto(taskId);
+        const type = bytes && photoType(bytes);
+        if (!bytes || !type) throw new HttpError(400, 'Take a photo first');
+        verdict = await claude.checkPhoto(task0, bytes, type as 'image/jpeg' | 'image/png' | 'image/webp');
+      } else {
+        const questions = questionsFor(task0.title);
+        verdict = await claude.checkAnswers(task0, questions.map((question, i) => ({ question, answer: answers![i] })));
+      }
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      console.error('Claude check failed', e);
+      throw new HttpError(503, 'Claude couldn’t check this right now. Please try again in a minute.');
+    }
+
+    const out = await transact(me, (d) => ({
+      data: withTimeZone(zoneOf(d, me), () => applyClaudeVerdict(d, taskId, me, kind, verdict, answers, now())),
+      result: { claude: verdict },
+    }));
+    if (kind === 'photo') await repo.deletePhoto(taskId).catch(() => undefined);
+    const res = await stateResponse(out.data, me);
+    const etag = res.headers.get('ETag') ?? '';
+    return new Response(`${(await res.text()).slice(0, -1)},"etag":${JSON.stringify(etag)},"result":${JSON.stringify(out.result ?? null)}}`, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+
   async function putPhoto(request: Request, taskId: string): Promise<Response> {
     const me = await authenticate(request);
     const { data } = await repo.load(me);
     const task = data.tasks[taskId];
     if (!task || task.ownerId !== me) throw new HttpError(404, 'Task not found');
     if (task.status !== 'todo' && task.status !== 'redo') throw new HttpError(400, 'This task has already been sent');
-    if (task.verify !== 'photo') throw new HttpError(400, 'This task is verified with questions');
+    if (task.verify === 'questions') throw new HttpError(400, 'This task is verified with questions');
     const bytes = await readBody(request, PHOTO_LIMIT);
     if (!photoType(bytes)) throw new HttpError(400, 'Choose a photo (JPEG, PNG or WebP)');
     await repo.putPhoto(taskId, bytes);
@@ -393,7 +459,7 @@ export function createCore(options: CoreOptions) {
     const route = routeOf(new URL(request.url).pathname);
     const method = request.method;
     try {
-      if (route === 'health' && method === 'GET') return json(200, { ok: true });
+      if (route === 'health' && method === 'GET') return json(200, { ok: true, claude: !!options.claude });
       if (route === 'signup' && method === 'POST') return await signUp(request, ip);
       if (route === 'signin' && method === 'POST') return await signIn(request, ip);
       if (route === 'signout' && method === 'POST') return await signOut(request);

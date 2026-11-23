@@ -16,12 +16,14 @@ The app comes in three pieces, all in this repository:
 
 - **Accounts and setup.**
   - Sign up and choose a mode: for myself, as a parent, or as a child.
+  - One **Turn on app lock** button opens each Android setting in turn and carries on by itself once they're on (with help for Android's "restricted setting" block).
   - Grant the phone permissions, pick which apps to lock, set the daily unlock time, and add a verifier.
 - **Tasks.** You set each task's reward in scrolls or minutes. Tasks can repeat every day or every weekday.
 - **Verification, in the Verify tab.** One tab in the bottom bar (with a badge for anything waiting on you) for all of it:
   - *Prove your tasks:* each of today's tasks opens straight to the camera or the questions. Tasks sent back for a redo come first; tasks waiting on your verifier have a *Remind* button.
   - *Photo:* the photo goes to your verifier's phone, and they approve it or ask for a redo.
-  - *Questions:* answer three recall questions on your honour.
+  - *Questions:* answer three recall questions. With Claude switched on, Claude reads the answers and asks for more detail when they're too thin.
+  - *Claude:* send the photo to Claude instead of a person. It approves straight away or sends it back saying what to fix. Claude runs on the server only, so its key never reaches a phone and nobody can fake its answer; each person gets up to 40 checks a day.
   - If your verifier hasn't replied after 3 hours, you can answer questions instead.
   - *Check others' work:* photos people sent you, with Approve and Ask to redo.
 - **People I verify for.** The icon at the top of the home screen lists the people who picked you, with a badge for photos waiting.
@@ -64,9 +66,10 @@ The backend runs on a free Supabase project: Postgres for accounts and tasks, St
 1. **Create a project** at [supabase.com](https://supabase.com).
 2. **Tables.** Open **SQL Editor**, paste all of [`supabase/schema.sql`](supabase/schema.sql) and click **Run**. It creates the tables, the two database functions the API uses and the private `kazi-proofs` photo bucket. It's safe to run again after updates.
 3. **API.** Open **Edge Functions → Deploy a new function → Via editor**, name it `kazi`, paste all of [`supabase/functions/kazi/index.ts`](supabase/functions/kazi/index.ts) and deploy. Then in the function's **Details**, turn **off** JWT verification ("Verify JWT" or "Enforce JWT verification"; Kazikwanza checks its own sign-in tokens). With the Supabase CLI instead: `supabase functions deploy kazi --no-verify-jwt`.
-4. **Live updates.** In **Realtime → Settings**, keep "Allow public access" on. Each account listens on a channel named with a random secret only that account knows, and the channel only ever says "something changed"; the data itself always comes through the API.
-5. **Point the apps at it.** In GitHub, go to **Settings → Secrets and variables → Actions → Variables** and add `KAZI_SUPABASE_URL` (the Project URL, like `https://abcd.supabase.co`) and `KAZI_SUPABASE_ANON_KEY` (the anon or publishable key; it's meant to be public). The next APK uses your project.
-6. **Website (optional).** In **Settings → Pages**, set Source to **GitHub Actions**. Each push to the main branch then publishes the website at `https://<owner>.github.io/<repo>/`.
+4. **Claude (optional).** In **Edge Functions → Secrets**, add `ANTHROPIC_API_KEY` with a key from [platform.claude.com](https://platform.claude.com). The "Send a photo to Claude" option then appears in the app, and Claude reads question answers. Without it, everything else works as before.
+5. **Live updates.** In **Realtime → Settings**, keep "Allow public access" on. Each account listens on a channel named with a random secret only that account knows, and the channel only ever says "something changed"; the data itself always comes through the API.
+6. **Point the apps at it.** In GitHub, go to **Settings → Secrets and variables → Actions → Variables** and add `KAZI_SUPABASE_URL` (the Project URL, like `https://abcd.supabase.co`) and `KAZI_SUPABASE_ANON_KEY` (the anon or publishable key; it's meant to be public). The next APK uses your project.
+7. **Website (optional).** In **Settings → Pages**, set Source to **GitHub Actions**. Each push to the main branch then publishes the website at `https://<owner>.github.io/<repo>/`.
 
 How it's kept safe: every table has row-level security on with no policies, and the anon key can't read or call anything directly. Only the `kazi` function, using the service-role key Supabase gives it, touches the data, and it applies the same permission checks as the Node server. Photos sit in a private bucket and are deleted once checked.
 
@@ -89,6 +92,7 @@ The `Dockerfile` runs anywhere else too. Without `DATABASE_URL`, data goes to `/
 | `DEFAULT_TIME_ZONE` | Time zone for accounts that haven't sent theirs (default `Africa/Nairobi`). |
 | `ALLOWED_ORIGINS` | Extra websites allowed to call the API (comma-separated). The Android app is always allowed. |
 | `PORT` | Port to listen on (default 8080). |
+| `ANTHROPIC_API_KEY` | Turns on Claude checks of proof photos and answers. |
 
 **Security.**
 - Passwords are hashed with PBKDF2-SHA256 (600,000 rounds), and sign-in tokens are stored only as hashes.

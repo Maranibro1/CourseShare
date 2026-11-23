@@ -46,7 +46,7 @@ function ProveRow({ task }: { task: Task }) {
     );
   }
 
-  const photo = task.verify === 'photo';
+  const photo = task.verify !== 'questions';
   return (
     <Link to={`/task/${task.id}/${photo ? 'photo' : 'questions'}`} className="prove-row" aria-label={`Prove ${task.title}`}>
       <div className="prove-icon">{photo ? <CameraIcon size={20} color="#15803D" /> : <ProveIcon size={20} color="#15803D" />}</div>
@@ -55,7 +55,9 @@ function ProveRow({ task }: { task: Task }) {
         <span className="small" style={task.status === 'redo' ? { color: '#B91C1C' } : undefined}>
           {task.status === 'redo'
             ? `Redo${task.redoReason ? `: ${task.redoReason}` : ''}`
-            : photo
+            : task.verify === 'claude'
+              ? 'Send a photo to Claude'
+              : photo
               ? `Send a photo to ${who}`
               : 'Answer 3 questions'}
         </span>

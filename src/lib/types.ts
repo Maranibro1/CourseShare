@@ -3,7 +3,8 @@ export type Mode = 'personal' | 'parent' | 'child';
 /** What a task pays out. Scrolls unlock feed apps, minutes unlock everything else. */
 export type RewardKind = 'scrolls' | 'minutes';
 
-export type VerifyMethod = 'photo' | 'questions';
+/** photo: a person you chose checks it. questions: recall questions. claude: Claude checks your photo straight away (online only). */
+export type VerifyMethod = 'photo' | 'questions' | 'claude';
 
 export type TaskStatus = 'todo' | 'pending' | 'redo' | 'done';
 
@@ -74,6 +75,8 @@ export interface Account {
   notifyKey?: string;
   /** Apps installed on this person's phone, so they (or their parent) can give any of them a screen-time limit. */
   phoneApps?: PhoneApp[];
+  /** How many times Claude checked this person's proof today, to keep costs bounded. */
+  claudeChecks?: { day: string; count: number };
 }
 
 export interface Task {

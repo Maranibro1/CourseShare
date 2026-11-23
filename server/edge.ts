@@ -6,6 +6,7 @@
  * Optional secrets: KAZI_SERVICE_KEY (a secret key to use instead of the service
  * role key) and KAZI_DEFAULT_TIME_ZONE (default Africa/Nairobi).
  */
+import { claudeChecker } from './claude';
 import { createCore } from './core';
 import { SupabaseRepo } from './supabase-repo';
 
@@ -21,6 +22,8 @@ const repo = new SupabaseRepo(url, key);
 const core = createCore({
   repo,
   defaultTimeZone: Deno.env.get('KAZI_DEFAULT_TIME_ZONE'),
+  // Set the ANTHROPIC_API_KEY secret (Edge Functions > Secrets) to let Claude check proof.
+  claude: claudeChecker(Deno.env.get('ANTHROPIC_API_KEY')),
   // Each account listens on its own channel, named after a secret only that account receives.
   notify: (ids, accounts) =>
     repo.broadcast(

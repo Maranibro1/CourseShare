@@ -10,6 +10,7 @@
  *   ALLOWED_ORIGINS   extra comma-separated origins that may call the API
  *   DEFAULT_TIME_ZONE zone for accounts that haven't sent theirs (default Africa/Nairobi)
  */
+import { claudeChecker } from './claude';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createKaziServer, fileRepo } from './node';
@@ -42,10 +43,13 @@ const { server } = createKaziServer({
     .map((s) => s.trim())
     .filter(Boolean),
   defaultTimeZone: process.env.DEFAULT_TIME_ZONE,
+  claude: claudeChecker(process.env.ANTHROPIC_API_KEY),
 });
 
 server.listen(port, () => {
-  console.log(`Kazikwanza server on port ${port} (${process.env.DATABASE_URL ? 'Postgres' : 'file'} storage)`);
+  console.log(
+    `Kazikwanza server on port ${port} (${process.env.DATABASE_URL ? 'Postgres' : 'file'} storage, Claude checks ${process.env.ANTHROPIC_API_KEY ? 'on' : 'off'})`,
+  );
 });
 
 function shutdown() {

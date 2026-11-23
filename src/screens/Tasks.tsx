@@ -16,7 +16,7 @@ import {
 } from '../lib/logic';
 import { compressImage, deletePhoto, savePhoto } from '../lib/photos';
 import { MIN_ANSWER_LENGTH, questionsFor } from '../lib/questions';
-import { SERVER_MODE, act, errorMessage, toast, useAccount, useData, useNow } from '../lib/store';
+import { SERVER_MODE, act, claudeVerdict, errorMessage, toast, useAccount, useClaudeOn, useData, useNow } from '../lib/store';
 import { formatAdded, formatClock, formatHoursMinutes, timeAgo } from '../lib/time';
 import type { Account, Repeat, RewardKind, Task, VerifyMethod } from '../lib/types';
 
@@ -175,6 +175,7 @@ export function TaskForm() {
   const [verify, setVerify] = useState<VerifyMethod>(existing?.verify ?? (me.verifier ? 'photo' : 'questions'));
   const [repeat, setRepeat] = useState<Repeat>(existing?.repeat ?? 'never');
   const [saving, setSaving] = useState(false);
+  const claudeOn = useClaudeOn();
 
   if (editing && !existing) return <MissingTask />;
 
@@ -231,9 +232,15 @@ export function TaskForm() {
             </Link>
           )}
         </label>
+        {(claudeOn || verify === 'claude') && (
+          <label className={`radio-row${verify === 'claude' ? ' selected' : ''}`}>
+            <input type="radio" name="verify" checked={verify === 'claude'} onChange={() => setVerify('claude')} />
+            <span style={{ flexGrow: 1 }}>Send a photo to Claude (checked straight away)</span>
+          </label>
+        )}
         <label className={`radio-row${verify === 'questions' ? ' selected' : ''}`}>
           <input type="radio" name="verify" checked={verify === 'questions'} onChange={() => setVerify('questions')} />
-          <span style={{ flexGrow: 1 }}>Answer a few questions</span>
+          <span style={{ flexGrow: 1 }}>{claudeOn ? 'Answer a few questions (Claude reads them)' : 'Answer a few questions'}</span>
         </label>
       </div>
       <RepeatPicker value={repeat} onChange={setRepeat} />
@@ -257,8 +264,8 @@ export function TaskDetail() {
 
   const mine = task.createdBy === me.id;
   const isOwner = task.ownerId === me.id;
-  const verifyWith = task.verify === 'photo' ? `Photo to ${approverName(data, task)}` : 'Questions';
-  const startVerify = task.verify === 'photo' ? `/task/${task.id}/photo` : `/task/${task.id}/questions`;
+  const verifyWith = task.verify === 'questions' ? 'Questions' : task.verify === 'claude' ? 'Photo checked by Claude' : `Photo to ${approverName(data, task)}`;
+  const startVerify = task.verify === 'questions' ? `/task/${task.id}/questions` : `/task/${task.id}/photo`;
 
   return (
     <main className="screen">
@@ -371,12 +378,17 @@ export function VerifyPhoto() {
       toast(SERVER_MODE ? errorMessage(err) : 'Could not save the photo on this phone. Free up some space and try again.');
       return;
     }
-    const { ok } = await act('submitPhoto', { taskId: task.id });
+    const { ok, result } = await act('submitPhoto', { taskId: task.id });
     setBusy(false);
-    if (ok) navigate(`/task/${task.id}/waiting`, { replace: true });
+    if (!ok) return;
+    const verdict = claudeVerdict(result);
+    if (!verdict) navigate(`/task/${task.id}/waiting`, { replace: true });
+    else if (verdict.approve) navigate(`/earned/${task.id}`, { replace: true });
+    else setPhoto(null); // Claude's reason now shows above; take a new photo.
   }
 
   const canSend = task.ownerId === me.id && (task.status === 'todo' || task.status === 'redo');
+  const byClaude = task.verify === 'claude';
 
   return (
     <main className="screen">
@@ -387,6 +399,11 @@ export function VerifyPhoto() {
           {photo ? 'Looks good? Tap the photo to retake it.' : 'Take a photo of your finished work'}
         </span>
       </div>
+      {task.status === 'redo' && task.redoReason && (
+        <div className="redo-note" role="status">
+          <strong>{who} says:</strong> {task.redoReason}
+        </div>
+      )}
       <button type="button" className="photo-drop" onClick={() => fileRef.current?.click()} aria-label={photo ? 'Retake photo' : 'Take photo'}>
         {photo ? (
           <img src={photo} alt={`Proof for ${task.title}`} />
@@ -401,15 +418,19 @@ export function VerifyPhoto() {
       </button>
       <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={pick} className="sr-only" data-testid="photo-input" />
       <div className="row" style={{ borderBottom: '1px solid #E4E4E7' }}>
-        <span className="muted">Send to</span>
+        <span className="muted">{byClaude ? 'Checked by' : 'Send to'}</span>
         <span className="strong">{who}</span>
       </div>
       <div className="spacer" />
       <div className="actions-12">
         <button className="btn btn-primary" onClick={send} disabled={!photo || busy || !canSend}>
-          {busy ? 'Sending…' : 'Send for approval'}
+          {busy ? (byClaude ? 'Claude is checking…' : 'Sending…') : byClaude ? 'Check with Claude' : 'Send for approval'}
         </button>
-        {!task.verifierId && <span className="note">If {who} doesn't reply in 3 hours, you can answer questions instead.</span>}
+        {byClaude ? (
+          <span className="note">Claude looks at the photo and answers in a few seconds. The photo is deleted straight after.</span>
+        ) : (
+          !task.verifierId && <span className="note">If {who} doesn't reply in 3 hours, you can answer questions instead.</span>
+        )}
       </div>
     </main>
   );
@@ -505,6 +526,7 @@ export function Questions() {
   const back = useBack(task ? `/task/${task.id}` : '/home');
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<string[]>(['', '', '']);
+  const [claudeNote, setClaudeNote] = useState<string | null>(null);
   const [honest, setHonest] = useState(false);
   const [sending, setSending] = useState(false);
   if (!task) return <MissingTask />;
@@ -522,9 +544,17 @@ export function Questions() {
       return;
     }
     setSending(true);
-    const { ok } = await act('completeWithQuestions', { taskId: task.id, answers });
+    const { ok, result } = await act('completeWithQuestions', { taskId: task.id, answers });
     setSending(false);
-    if (ok) navigate(`/earned/${task.id}`, { replace: true });
+    if (!ok) return;
+    const verdict = claudeVerdict(result);
+    if (verdict && !verdict.approve) {
+      // Claude wants more detail: go back to the first answer with its note.
+      setClaudeNote(verdict.reason);
+      setStep(0);
+      return;
+    }
+    navigate(`/earned/${task.id}`, { replace: true });
   }
 
   return (
@@ -548,6 +578,11 @@ export function Questions() {
         </span>
         <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.3, lineHeight: 1.25 }}>{questions[step]}</h1>
       </div>
+      {claudeNote && (
+        <div className="redo-note" role="status">
+          <strong>Claude says:</strong> {claudeNote}
+        </div>
+      )}
       <div className="field">
         <label className="label" htmlFor="answer">
           Your answer
@@ -605,7 +640,11 @@ export function Earned() {
         </span>
         <span style={{ fontSize: 18, fontWeight: 600 }}>{task.reward.kind === 'scrolls' ? 'scrolls earned' : 'of screen time earned'}</span>
         <span className="muted" style={{ fontSize: 15 }}>
-          {approver ? `${approver.name} approved your ${task.title.toLowerCase()}.` : `You verified “${task.title}” on your honour.`}
+          {approver
+            ? `${approver.name} approved your ${task.title.toLowerCase()}.`
+            : task.verify === 'claude'
+              ? `Claude approved your ${task.title.toLowerCase()}.`
+              : `You verified “${task.title}” on your honour.`}
         </span>
       </div>
       <div className="box">

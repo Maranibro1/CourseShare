@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promis
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import type { ClaudeChecker } from './claude';
 import { createCore } from './core';
 import { MemoryRepo, type Repo } from './repo';
 
@@ -19,6 +20,8 @@ export interface NodeServerOptions {
   allowedOrigins?: string[];
   defaultTimeZone?: string;
   passwordRounds?: number;
+  /** Claude, for checking proof photos and answers. */
+  claude?: ClaudeChecker | null;
 }
 
 // The Android app's web view runs at https://localhost (http://localhost on older setups).
@@ -94,6 +97,7 @@ export function createKaziServer(options: NodeServerOptions) {
     repo: options.repo,
     defaultTimeZone: options.defaultTimeZone,
     passwordRounds: options.passwordRounds,
+    claude: options.claude,
     notify: (ids) => {
       for (const id of ids) for (const res of listeners.get(id) ?? []) res.write('event: change\ndata: {}\n\n');
     },

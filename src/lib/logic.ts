@@ -470,6 +470,7 @@ export function approverFor(data: AppData, t: Task): Account | undefined {
 
 /** Display name for whoever checks this task. */
 export function approverName(data: AppData, t: Task): string {
+  if (t.verify === 'claude') return 'Claude';
   const a = approverFor(data, t);
   if (a) return a.name;
   if (t.verifierContact) return t.verifierContact;
@@ -486,6 +487,7 @@ export function canApprove(data: AppData, t: Task, accountId: string): boolean {
 export function submitPhoto(data: AppData, taskId: string, ownerId: string, now: number): AppData {
   const t0 = task(data, taskId);
   if (t0.ownerId !== ownerId) throw new KaziError('This is not your task');
+  if (t0.verify === 'claude') throw new KaziError('Claude can only check photos when you’re online. Try again with a connection.');
   if (t0.verify !== 'photo') throw new KaziError('This task is verified with questions');
   if (t0.status === 'done' || t0.status === 'pending') throw new KaziError('This task has already been sent');
   const next = clone(data);
@@ -539,6 +541,64 @@ export function completeWithQuestions(data: AppData, taskId: string, ownerId: st
   const t = task(next, taskId);
   if (fallback) t.verify = 'questions';
   award(next, t, null, now);
+  return next;
+}
+
+/* ───────── Claude ───────── */
+
+/** Claude checks per person per day, so one account can't run up the bill. */
+export const CLAUDE_DAILY_CHECKS = 40;
+
+export function claudeChecksLeft(a: Account, now: number): number {
+  const used = a.claudeChecks?.day === dayKey(now) ? a.claudeChecks.count : 0;
+  return Math.max(0, CLAUDE_DAILY_CHECKS - used);
+}
+
+/** Who may ask Claude about a task right now, and how: throws when they can't. */
+export function claudeCanCheck(data: AppData, taskId: string, ownerId: string, kind: 'photo' | 'answers', now: number): Task {
+  const t = task(data, taskId);
+  if (t.ownerId !== ownerId) throw new KaziError('This is not your task');
+  if (t.status === 'done') throw new KaziError('This task is already done');
+  if (kind === 'photo' && t.verify !== 'claude') throw new KaziError('This task isn’t checked by Claude');
+  if (kind === 'photo' && t.status === 'pending') throw new KaziError('This task is waiting for approval');
+  if (claudeChecksLeft(account(data, ownerId), now) <= 0) throw new KaziError('Claude has checked enough for today. Try again tomorrow.');
+  return t;
+}
+
+/**
+ * Applies Claude's verdict on a photo or on question answers. Server only:
+ * the verdict comes from the Claude API, never from a phone, so this is not
+ * an action anyone can call.
+ */
+export function applyClaudeVerdict(
+  data: AppData,
+  taskId: string,
+  ownerId: string,
+  kind: 'photo' | 'answers',
+  verdict: { approve: boolean; reason: string },
+  answers: string[] | null,
+  now: number,
+): AppData {
+  claudeCanCheck(data, taskId, ownerId, kind, now);
+  let next = clone(data);
+  const owner = account(next, ownerId);
+  const today = dayKey(now);
+  owner.claudeChecks = { day: today, count: (owner.claudeChecks?.day === today ? owner.claudeChecks.count : 0) + 1 };
+  if (kind === 'answers') {
+    // Wrong answers just come back with Claude's note; the task stays open.
+    if (verdict.approve) next = completeWithQuestions(next, taskId, ownerId, answers ?? [], now);
+    return next;
+  }
+  const t = task(next, taskId);
+  if (verdict.approve) {
+    award(next, t, null, now);
+    notify(next, ownerId, `Claude approved your ${t.title.toLowerCase()}. ${rewardLabel(t.reward.kind, t.reward.amount)} ${t.reward.kind === 'scrolls' ? 'scrolls' : 'screen time'}`, `/earned/${t.id}`, now);
+  } else {
+    t.status = 'redo';
+    t.redoReason = verdict.reason.trim().slice(0, 300) || null;
+    t.submittedAt = null;
+    notify(next, ownerId, `Claude asked you to redo “${t.title}”. ${t.redoReason ?? ''}`.trim(), `/task/${t.id}`, now);
+  }
   return next;
 }
 

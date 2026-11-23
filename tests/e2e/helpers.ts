@@ -37,9 +37,8 @@ export async function signOut(page: Page) {
 export async function onboardPersonal(page: Page, verifier: string | null) {
   await page.getByText('For myself').click();
   await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByRole('button', { name: 'Allow Usage access' }).click();
-  await page.getByRole('button', { name: 'Allow Accessibility' }).click();
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Turn on the app lock' })).toBeVisible();
+  await page.getByRole('button', { name: 'Turn on app lock' }).click();
   await expect(page.getByRole('button', { name: 'Lock 6 apps' })).toBeVisible();
   await page.getByRole('button', { name: 'Lock 6 apps' }).click();
   await page.getByText('No free unlock, only earn scrolls').click();

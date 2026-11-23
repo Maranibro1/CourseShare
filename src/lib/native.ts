@@ -12,6 +12,7 @@ interface KaziLockPlugin {
   getStatus(): Promise<{ accessibility: boolean; usage: boolean }>;
   openAccessibilitySettings(): Promise<void>;
   openUsageAccessSettings(): Promise<void>;
+  openAppInfo(): Promise<void>;
   sync(rules: NativeRules): Promise<void>;
   drain(options: { after: number }): Promise<{ events: NativeUsageEvent[] }>;
   openApp(options: { packages: string[] }): Promise<{ opened: boolean }>;

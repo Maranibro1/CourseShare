@@ -17,9 +17,8 @@ test('parent links a child, sets a task and approves the photo', async ({ page }
   await page.getByRole('button', { name: 'Continue' }).click();
   await page.getByLabel('Family code').fill(code.toLowerCase());
   await page.getByRole('button', { name: 'Join' }).click();
-  await page.getByRole('button', { name: 'Allow Usage access' }).click();
-  await page.getByRole('button', { name: 'Allow Accessibility' }).click();
-  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Turn on the app lock' })).toBeVisible();
+  await page.getByRole('button', { name: 'Turn on app lock' }).click();
   await expect(page.getByRole('heading', { name: 'My tasks' })).toBeVisible();
   await expect(page.getByText('No tasks from Achieng yet.')).toBeVisible();
   // Children can't reach the adult screens.

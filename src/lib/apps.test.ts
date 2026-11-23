@@ -249,3 +249,19 @@ describe('a parent runs their child\'s account', () => {
     expect(() => deleteTask(data, own.id, leo)).toThrow();
   });
 });
+
+describe('Claude checks', () => {
+  it('allow 40 a day per person, then wait until tomorrow', async () => {
+    const { applyClaudeVerdict, claudeCanCheck, claudeChecksLeft, CLAUDE_DAILY_CHECKS, addTask } = await import('./logic');
+    let { data, id } = sam();
+    const r = addTask(data, id, { title: 'Read', rewardKind: 'scrolls', amount: 5, verify: 'questions', repeat: 'never', dueTime: null }, T0);
+    data = r.data;
+    for (let i = 0; i < CLAUDE_DAILY_CHECKS; i += 1) {
+      data = applyClaudeVerdict(data, r.id, id, 'answers', { approve: false, reason: 'More detail.' }, ['a', 'b', 'c'], T0);
+    }
+    expect(claudeChecksLeft(data.accounts[id], T0)).toBe(0);
+    expect(() => claudeCanCheck(data, r.id, id, 'answers', T0)).toThrow(/tomorrow/);
+    expect(claudeChecksLeft(data.accounts[id], T0 + 24 * 3600_000)).toBe(CLAUDE_DAILY_CHECKS);
+    expect(data.tasks[r.id].status).toBe('todo');
+  });
+});

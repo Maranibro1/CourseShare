@@ -108,7 +108,7 @@ function phoneApps(v: unknown) {
 
 const REWARD_KINDS: RewardKind[] = ['scrolls', 'minutes'];
 const REPEATS: Repeat[] = ['never', 'daily', 'weekdays'];
-const VERIFY: VerifyMethod[] = ['photo', 'questions'];
+const VERIFY: VerifyMethod[] = ['photo', 'questions', 'claude'];
 
 function oneOf<T extends string>(v: unknown, options: T[]): T {
   if (typeof v !== 'string' || !options.includes(v as T)) bad();

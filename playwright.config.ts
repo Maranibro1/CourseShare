@@ -19,6 +19,8 @@ export default defineConfig({
   use: {
     ...devices['Pixel 7'],
     trace: 'retain-on-failure',
+    // Lets a machine with a different preinstalled Chromium run the tests (CI installs the matching one).
+    ...(process.env.KAZI_CHROMIUM ? { launchOptions: { executablePath: process.env.KAZI_CHROMIUM } } : {}),
   },
   projects: [
     { name: 'local', testIgnore: /sync\.spec\.ts/, use: { baseURL: 'http://localhost:4173' } },
@@ -26,6 +28,8 @@ export default defineConfig({
     ...(supabaseUrl ? [{ name: 'supabase', testMatch: /sync\.spec\.ts/, use: { baseURL: 'http://localhost:4175' } }] : []),
   ],
   webServer: [
+    // A stand-in for the Claude API, so the two-phone tests can check proof with "Claude" for free.
+    { command: 'node tests/e2e/fake-claude.mjs', url: 'http://localhost:4176', reuseExistingServer: false, timeout: 30_000 },
     {
       command: 'npm run build && npx vite preview --port 4173 --strictPort',
       url: 'http://localhost:4173',
@@ -34,7 +38,7 @@ export default defineConfig({
     },
     {
       command:
-        'rm -rf .e2e-data && VITE_SYNC=server VITE_APK_URL=/downloads/kazikwanza.apk npx vite build --outDir .e2e-web --emptyOutDir && mkdir -p .e2e-web/downloads && echo test > .e2e-web/downloads/kazikwanza.apk && npm run build:server && PORT=4174 STATIC_DIR=.e2e-web DATA_DIR=.e2e-data node dist-server/index.js',
+        'rm -rf .e2e-data && VITE_SYNC=server VITE_APK_URL=/downloads/kazikwanza.apk npx vite build --outDir .e2e-web --emptyOutDir && mkdir -p .e2e-web/downloads && echo test > .e2e-web/downloads/kazikwanza.apk && npm run build:server && PORT=4174 STATIC_DIR=.e2e-web DATA_DIR=.e2e-data ANTHROPIC_API_KEY=test-key ANTHROPIC_BASE_URL=http://localhost:4176 node dist-server/index.js',
       url: 'http://localhost:4174/api/health',
       reuseExistingServer: false,
       timeout: 180_000,

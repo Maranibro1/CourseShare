@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { applyAction, type ActionName } from './actions';
 import { KaziError, createAccount, dailyTick, emptyData, normalizeContact, signIn as localSignIn, signOut as localSignOut } from './logic';
@@ -270,8 +270,9 @@ async function actOnServer(name: ActionName, args: Record<string, unknown>): Pro
     showToast('Please sign in again.');
     return { ok: false };
   }
-  // Family codes are random, so a guess would show a different code from the server's.
-  if (name !== 'createLinkCode') {
+  // Family codes are random, so a guess would show a different code from the server's;
+  // proof may be checked by Claude, so only the server knows whether it passed.
+  if (name !== 'createLinkCode' && name !== 'submitPhoto' && name !== 'completeWithQuestions') {
     try {
       setData(applyAction(before, actor, name, args, Date.now()).data);
     } catch {
@@ -292,6 +293,42 @@ async function actOnServer(name: ActionName, args: Record<string, unknown>): Pro
     }
     return { ok: false };
   }
+}
+
+/* ───────── Claude ───────── */
+
+/** What Claude said about a photo or answers, when Claude checked them. */
+export function claudeVerdict(result: unknown): { approve: boolean; reason: string } | null {
+  const c = (result as { claude?: { approve?: unknown; reason?: unknown } } | null)?.claude;
+  return c && typeof c.approve === 'boolean' ? { approve: c.approve, reason: String(c.reason ?? '') } : null;
+}
+
+let claudeOn: boolean | null = null;
+let claudeAsk: Promise<boolean> | null = null;
+const claudeListeners = new Set<() => void>();
+
+/** True when the server has Claude set up to check proof. Always false on a phone without a server. */
+export function useClaudeOn(): boolean {
+  useEffect(() => {
+    if (!SERVER_MODE || claudeAsk) return;
+    claudeAsk = fetch(apiUrl('/health'), { headers: apiHeaders(), cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b: { claude?: boolean } | null) => !!b?.claude)
+      .catch(() => false)
+      .then((on) => {
+        claudeOn = on;
+        if (!on) claudeAsk = null; // ask again next time, in case the server was asleep
+        claudeListeners.forEach((l) => l());
+        return on;
+      });
+  }, []);
+  return useSyncExternalStore(
+    (l) => {
+      claudeListeners.add(l);
+      return () => claudeListeners.delete(l);
+    },
+    () => claudeOn === true,
+  );
 }
 
 /* ───────── Accounts ───────── */

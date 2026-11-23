@@ -56,6 +56,14 @@ public class KaziLockPlugin extends Plugin {
         openSettings(intent, call);
     }
 
+    /** Kazikwanza's App info page, where Android 13+ hides "Allow restricted settings" for apps installed from a file. */
+    @PluginMethod
+    public void openAppInfo(PluginCall call) {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+        openSettings(intent, call);
+    }
+
     /** Receives the rules and balances the phone should enforce. */
     @PluginMethod
     public void sync(PluginCall call) {

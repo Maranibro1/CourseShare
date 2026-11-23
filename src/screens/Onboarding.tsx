@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckIcon, ShieldIcon } from '../components/Icons';
 import { BackButton, StepHeader } from '../components/ui';
@@ -62,83 +62,144 @@ export function ChooseMode() {
   );
 }
 
+type Step = 'usage' | 'accessibility';
+
+/** The phone setting each permission lives in, and what to tap there. */
+const STEPS: { key: Step; title: string; why: string; how: string }[] = [
+  {
+    key: 'usage',
+    title: 'Usage access',
+    why: 'Lets Kazikwanza see which app is open, so it can lock it.',
+    how: 'Find Kazikwanza in the list and switch on “Permit usage access”, then come back.',
+  },
+  {
+    key: 'accessibility',
+    title: 'App lock',
+    why: 'Counts each swipe in your scrolling apps and times games.',
+    how: 'Tap “Installed apps” (or “Downloaded apps”), then “Kazikwanza app lock”, switch it on and tap Allow. Then come back.',
+  },
+];
+
+/**
+ * One button turns on everything the phone lock needs. On Android it opens
+ * each settings page in turn, moving on by itself as each one is switched
+ * on, then carries on with setup. Elsewhere it's a single tap.
+ */
 export function Permissions() {
   const me = useAccount();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const forChild = params.get('for') === 'child';
   const phone = useLockStatus();
-  // In the Android app these are the phone's real settings; on the web they are a walkthrough, saved on Continue.
-  const [walkthrough, setWalkthrough] = useState(me.permissions);
-  const { usage, accessibility } = isNativeAndroid ? phone ?? { usage: false, accessibility: false } : walkthrough;
+  const [started, setStarted] = useState(false);
+  const [tries, setTries] = useState<Record<Step, number>>({ usage: 0, accessibility: 0 });
+  const [saving, setSaving] = useState(false);
+  const finished = useRef(false);
+  const usage = isNativeAndroid ? !!phone?.usage : false;
+  const accessibility = isNativeAndroid ? !!phone?.accessibility : false;
+  const on: Record<Step, boolean> = { usage, accessibility };
+  const current = STEPS.find((x) => !on[x.key]) ?? null;
 
-  function allow(key: 'usage' | 'accessibility') {
-    if (isNativeAndroid) {
-      const open = key === 'usage' ? KaziLock.openUsageAccessSettings() : KaziLock.openAccessibilitySettings();
-      open.catch(() => toast('Open Settings and allow Kazikwanza there.'));
+  async function finish(permissions: { usage: boolean; accessibility: boolean }) {
+    if (finished.current) return;
+    finished.current = true;
+    setSaving(true);
+    const patch = forChild ? { permissions, onboarded: true } : { permissions };
+    const { ok } = await act('updateProfile', { patch });
+    setSaving(false);
+    if (!ok) {
+      finished.current = false;
       return;
     }
-    setWalkthrough((w) => ({ ...w, [key]: true }));
-  }
-
-  async function next() {
-    const patch = forChild ? { permissions: { usage, accessibility }, onboarded: true } : { permissions: { usage, accessibility } };
-    if (!(await act('updateProfile', { patch })).ok) return;
     // This phone now enforces this account's rules.
     setDeviceOwner(me.id);
     navigate(forChild ? '/child' : '/onboarding/apps', { replace: forChild });
   }
 
-  const item = (key: 'usage' | 'accessibility', title: string, body: string, on: boolean) => (
-    <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 14, borderRadius: 14 }}>
-      <div className="stack-4" style={{ flexGrow: 1 }}>
-        <span className="strong">{title}</span>
-        <span className="muted" style={{ fontSize: 14 }}>
-          {body}
-        </span>
-      </div>
-      {on ? (
-        <span className="strong green-text" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 14 }}>
-          <CheckIcon size={16} color="#15803D" width={3} />
-          On
-        </span>
-      ) : (
-        <button
-          className="btn btn-primary"
-          style={{ height: 40, width: 'auto', borderRadius: 10, fontSize: 14 }}
-          onClick={() => allow(key)}
-          aria-label={`Allow ${title}`}
-        >
-          Allow
-        </button>
-      )}
-    </div>
-  );
+  function openStep(step: Step) {
+    setTries((t) => ({ ...t, [step]: t[step] + 1 }));
+    const open = step === 'usage' ? KaziLock.openUsageAccessSettings() : KaziLock.openAccessibilitySettings();
+    open.catch(() => toast('Open your phone’s Settings and allow Kazikwanza there.'));
+  }
+
+  function turnOn() {
+    if (!isNativeAndroid) {
+      // Nothing to switch on outside the Android app; the web version keeps time itself.
+      void finish({ usage: true, accessibility: true });
+      return;
+    }
+    setStarted(true);
+    if (current) openStep(current.key);
+    else void finish({ usage, accessibility });
+  }
+
+  // Coming back from Settings: open the next page by itself, and carry on once everything is on.
+  const lastSeen = useRef<string>('');
+  useEffect(() => {
+    if (!isNativeAndroid || !started || !phone) return;
+    const key = `${usage}-${accessibility}`;
+    if (key === lastSeen.current) return;
+    const before = lastSeen.current;
+    lastSeen.current = key;
+    if (usage && accessibility) {
+      void finish({ usage, accessibility });
+    } else if (before && current && tries[current.key] === 0) {
+      openStep(current.key);
+    }
+  }, [phone, started, usage, accessibility]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const restricted = isNativeAndroid && current?.key === 'accessibility' && tries.accessibility > 0;
 
   return (
     <main className="screen">
       {forChild ? <BackButton fallback="/join" /> : <StepHeader step={2} of={4} fallback="/onboarding/mode" />}
       <div className="stack-8">
-        <h1 className="h1">Allow access</h1>
-        <p className="lead">Kazikwanza needs two permissions to lock apps and count your scrolls.</p>
+        <h1 className="h1">Turn on the app lock</h1>
+        <p className="lead">
+          {isNativeAndroid
+            ? 'One tap. Kazikwanza opens each setting for you; switch it on, come back, and it carries on by itself.'
+            : 'Kazikwanza locks your apps and counts your scrolls. On Android, the app asks your phone for two settings at this step.'}
+        </p>
       </div>
-      <div className="stack-12">
-        {item('usage', 'Usage access', 'See which app is open so we can lock it.', usage)}
-        {item('accessibility', 'Accessibility', 'Count each scroll in your social apps.', accessibility)}
-      </div>
+      <ol className="perm-steps">
+        {STEPS.map((x, i) => {
+          const done = on[x.key];
+          const active = isNativeAndroid && started && current?.key === x.key;
+          return (
+            <li key={x.key} className={`perm-step${done ? ' done' : ''}${active ? ' active' : ''}`}>
+              <span className="perm-num" aria-hidden="true">
+                {done ? <CheckIcon size={14} color="#fff" width={3} /> : i + 1}
+              </span>
+              <div className="stack-4" style={{ flexGrow: 1 }}>
+                <span className="strong">
+                  {x.title}
+                  {done && <span className="green-text"> · On</span>}
+                </span>
+                <span className="muted" style={{ fontSize: 14 }}>
+                  {active ? x.how : x.why}
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      {restricted && (
+        <div className="redo-note" role="status">
+          <strong>Switch greyed out, or a “Restricted setting” message?</strong> Android blocks this for apps installed from a file. Tap{' '}
+          <strong>Open App info</strong> below, then the <strong>⋮</strong> menu at the top right, and choose <strong>Allow restricted settings</strong>. Come back
+          and tap the green button again.
+          <button className="btn btn-secondary" style={{ marginTop: 10, height: 44 }} onClick={() => KaziLock.openAppInfo().catch(() => undefined)}>
+            Open App info
+          </button>
+        </div>
+      )}
       <div className="info">
         <ShieldIcon size={20} color="#15803D" />
-        <span>We never read your messages, posts or what you watch. We only count scrolls.</span>
+        <span>We never read your messages, posts or what you watch. We only count scrolls and time.</span>
       </div>
-      {isNativeAndroid && !accessibility && (
-        <p className="small">
-          In Settings, open <strong>Installed apps</strong> (or <strong>Downloaded apps</strong>), tap <strong>Kazikwanza app lock</strong> and turn it on. If
-          Android says the setting is restricted, open Kazikwanza's App info, tap ⋮ and choose <strong>Allow restricted settings</strong> first.
-        </p>
-      )}
       <div className="spacer" />
-      <button className="btn btn-primary" onClick={next} disabled={!usage || !accessibility}>
-        Continue
+      <button className="btn btn-primary" onClick={turnOn} disabled={saving}>
+        {saving ? 'Saving…' : !isNativeAndroid || !current ? 'Turn on app lock' : started ? `Open ${current.title} settings` : 'Turn on app lock'}
       </button>
     </main>
   );

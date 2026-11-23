@@ -16,6 +16,7 @@
     "build:supabase": "node scripts/build-supabase.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0",
     "@capacitor/android": "6.2.2",
     "@capacitor/app": "6.0.2",
     "@capacitor/core": "6.2.2",

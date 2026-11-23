@@ -93,9 +93,8 @@ test('parent and child on separate phones', async ({ browser }) => {
   await leo.getByRole('button', { name: 'Continue' }).click();
   await leo.getByLabel('Family code').fill(code);
   await leo.getByRole('button', { name: 'Join' }).click();
-  await leo.getByRole('button', { name: 'Allow Usage access' }).click();
-  await leo.getByRole('button', { name: 'Allow Accessibility' }).click();
-  await leo.getByRole('button', { name: 'Continue' }).click();
+  await expect(leo.getByRole('heading', { name: 'Turn on the app lock' })).toBeVisible();
+  await leo.getByRole('button', { name: 'Turn on app lock' }).click();
   await expect(leo.getByRole('heading', { name: 'My tasks' })).toBeVisible();
 
   // The parent's link screen notices the child joined on the other phone.
@@ -169,4 +168,61 @@ test('stays signed in after reopening the app', async ({ browser }) => {
   await p.reload();
   await expect(p.getByRole('button', { name: 'Lock X' })).toHaveAttribute('aria-pressed', 'true');
   await expect(p.getByRole('button', { name: 'Lock Snapchat' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('Claude checks a photo straight away, and grades question answers', async ({ browser }) => {
+  const sam = await phone(browser);
+  await signUp(sam, 'Sam', `sam.claude${Date.now()}@example.com`);
+  await onboardPersonal(sam, null);
+
+  // A good photo: approved in seconds, scrolls paid.
+  await sam.getByRole('link', { name: 'Add task' }).click();
+  await sam.getByLabel('Task', { exact: true }).fill('Clean my room');
+  await sam.getByRole('button', { name: '50', exact: true }).click();
+  await sam.getByText('Send a photo to Claude (checked straight away)').click();
+  await sam.getByRole('button', { name: 'Add task' }).click();
+  await sam.getByRole('link', { name: /Clean my room/ }).click();
+  await expect(sam.getByText('Photo checked by Claude')).toBeVisible();
+  await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  await sam.getByTestId('photo-input').setInputFiles(PHOTO);
+  await sam.getByRole('button', { name: 'Check with Claude' }).click();
+  await expect(sam.getByText('Claude approved your clean my room.')).toBeVisible();
+  await sam.getByRole('button', { name: 'Done' }).click();
+  await expect(sam.getByTestId('scroll-balance')).toHaveText('50');
+
+  // A photo Claude isn't happy with comes back with its reason.
+  await sam.getByRole('link', { name: 'Add task' }).click();
+  await sam.getByLabel('Task', { exact: true }).fill('Messy desk');
+  await sam.getByRole('button', { name: '20', exact: true }).click();
+  await sam.getByText('Send a photo to Claude (checked straight away)').click();
+  await sam.getByRole('button', { name: 'Add task' }).click();
+  await sam.getByRole('link', { name: /Messy desk/ }).click();
+  await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  await sam.getByTestId('photo-input').setInputFiles(PHOTO);
+  await sam.getByRole('button', { name: 'Check with Claude' }).click();
+  await expect(sam.getByText('The room still looks messy. Tidy the bed and floor, then try again.')).toBeVisible();
+  await expect(sam.getByRole('button', { name: 'Check with Claude' })).toBeDisabled();
+
+  // Questions: Claude reads the answers.
+  await sam.goto('/#/home');
+  await sam.getByRole('link', { name: 'Add task' }).click();
+  await sam.getByLabel('Task', { exact: true }).fill('Read 20 pages');
+  await sam.getByRole('button', { name: '50', exact: true }).click();
+  await sam.getByText('Answer a few questions (Claude reads them)').click();
+  await sam.getByRole('button', { name: 'Add task' }).click();
+  await sam.getByRole('link', { name: /Read 20 pages/ }).click();
+  await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  const answer = async (texts: string[]) => {
+    for (const [i, t] of texts.entries()) {
+      await sam.getByLabel('Your answer').fill(t);
+      if (i < texts.length - 1) await sam.getByRole('button', { name: 'Next' }).click();
+    }
+    const honest = sam.getByText('I honestly completed this task');
+    if (!(await sam.getByRole('checkbox').isChecked().catch(() => false))) await honest.click();
+    await sam.getByRole('button', { name: 'Finish' }).click();
+  };
+  await answer(['I dunno, some book really', 'Something about habits', 'Not sure what I learned']);
+  await expect(sam.getByText('Tell me which book and chapter you read.')).toBeVisible();
+  await answer(['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.']);
+  await expect(sam.getByText('+50')).toBeVisible();
 });
