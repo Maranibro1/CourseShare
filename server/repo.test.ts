@@ -31,6 +31,13 @@ function world() {
   const mum = add('Achieng', 'achieng@example.com');
   const leo = add('Leo', 'leo@example.com');
   const mallory = add('Mallory', 'mallory@example.com');
+  // Usernames: Kofi picks Wanjiru by @username; Wanjiru must see Kofi and his photo task, and nobody else must.
+  const wanjiru = add('Wanjiru', 'wanjiru@example.com');
+  const kofi = add('Kofi', 'kofi@example.com');
+  d = updateAccount(d, wanjiru, { username: `wanjiru_${run}` });
+  d = updateAccount(d, kofi, { username: `kofi_${run}`, onboarded: true, verifier: { contact: `@Wanjiru_${run}`, relation: 'Friend' } });
+  const t2 = addTask(d, kofi, { title: 'Gym', rewardKind: 'minutes', amount: 20, verify: 'photo', repeat: 'never' }, T0);
+  d = submitPhoto(t2.data, t2.id, kofi, T0);
   d = updateAccount(d, sam, { onboarded: true, verifier: { contact: `EMMA+${run}@example.com`, relation: 'Sister' } });
   const t1 = addTask(d, sam, { title: 'Essay', rewardKind: 'scrolls', amount: 50, verify: 'photo', repeat: 'never' }, T0);
   d = submitPhoto(t1.data, t1.id, sam, T0);
@@ -43,7 +50,7 @@ function world() {
   d = sendMessage(d, sam, emma, 'Sent my essay', T0);
   d = sendMessage(d, leo, mum, 'Done!', T0 + 5);
   d.sessionId = null;
-  return { d, ids: { sam, emma, mum, leo, mallory }, code: d.linkCodes[0].code };
+  return { d, ids: { sam, emma, mum, leo, mallory, wanjiru, kofi }, code: d.linkCodes[0].code };
 }
 
 /** Compares two loads regardless of row order. */
@@ -98,6 +105,11 @@ describe.each(repos)('$name repo', ({ make }) => {
     expect(mallory.data.messages).toEqual([]);
     const emma = await repo.load(ids.emma);
     expect(Object.values(emma.data.tasks).map((t) => t.title)).toEqual(['Essay']);
+    // Picked by @username: Wanjiru sees Kofi and his photo, and Kofi sees her.
+    const wanjiru = await repo.load(ids.wanjiru);
+    expect(Object.keys(wanjiru.data.accounts).sort()).toEqual([ids.kofi, ids.wanjiru].sort());
+    expect(Object.values(wanjiru.data.tasks).map((t) => t.title)).toEqual(['Gym']);
+    expect(Object.keys((await repo.load(ids.kofi)).data.accounts).sort()).toEqual([ids.kofi, ids.wanjiru].sort());
   });
 
   it('refuses a stale write instead of overwriting it', async () => {
@@ -116,6 +128,14 @@ describe.each(repos)('$name repo', ({ make }) => {
   it('refuses a second account with the same email or phone', async () => {
     const dup = createAccount(emptyData(), { name: 'Sam 2', email: `SAM+${run}@example.com`, passwordHash: 'x' }, T0);
     await expect(repo.commit(diff(emptyData(), dup.data, { accounts: {}, tasks: {} }))).rejects.toBeInstanceOf(TakenError);
+  });
+
+  it('refuses a username someone else already has', async () => {
+    const l = await repo.load(ids.mallory);
+    const after = structuredClone(l.data);
+    after.accounts[ids.mallory].username = `wanjiru_${run}`;
+    await expect(repo.commit(diff(l.data, after, l.versions))).rejects.toBeInstanceOf(TakenError);
+    expect((await repo.findAccount(`@wanjiru_${run}`))?.id).toBe(ids.wanjiru);
   });
 
   it('saves sessions and finds accounts by email', async () => {

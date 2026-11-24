@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { cleanUsername } from '../lib/logic';
 import { Link, useNavigate } from 'react-router-dom';
 import { CheckIcon } from '../components/Icons';
 import { InstallCard } from '../components/Install';
@@ -38,6 +39,7 @@ export function SignUp() {
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -45,13 +47,17 @@ export function SignUp() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    if (!cleanUsername(username)) {
+      setError('Pick a username: 3–20 letters, numbers, dots or underscores');
+      return;
+    }
     if (password.length < 6) {
       setError('Use at least 6 characters for your password');
       return;
     }
     setBusy(true);
     try {
-      await signUp({ name, email, password });
+      await signUp({ name, email, username, password });
       navigate('/onboarding/mode', { replace: true });
     } catch (err) {
       setError(errorMessage(err));
@@ -85,6 +91,26 @@ export function SignUp() {
             autoCapitalize="none"
             required
           />
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="username">
+            Username
+          </label>
+          <div className="input-at">
+            <span aria-hidden="true">@</span>
+            <input
+              id="username"
+              className="input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.replace(/^@/, '').toLowerCase())}
+              autoCapitalize="none"
+              autoCorrect="off"
+              maxLength={20}
+              placeholder="sam_k"
+              required
+            />
+          </div>
+          <span className="small">Friends use it to pick you as their verifier.</span>
         </div>
         <div className="field">
           <label className="label" htmlFor="password">
@@ -147,7 +173,7 @@ export function SignIn() {
       <div className="stack" style={{ gap: 16 }}>
         <div className="field">
           <label className="label" htmlFor="signin-email">
-            Email or phone
+            Email, phone or username
           </label>
           <input
             id="signin-email"

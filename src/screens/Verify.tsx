@@ -2,7 +2,16 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CameraIcon, ChevronIcon, ProveIcon } from '../components/Icons';
 import { NavScreen } from '../components/ui';
-import { QUESTIONS_FALLBACK_MS, approverName, canFallBackToQuestions, requestsFor, rewardLabel, todaysTasks } from '../lib/logic';
+import {
+  QUESTIONS_FALLBACK_MS,
+  approverName,
+  canFallBackToQuestions,
+  cleanUsername,
+  findAccountByContact,
+  requestsFor,
+  rewardLabel,
+  todaysTasks,
+} from '../lib/logic';
 import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { formatHoursMinutes } from '../lib/time';
 import type { Task } from '../lib/types';
@@ -73,6 +82,88 @@ function ProveRow({ task }: { task: Task }) {
  * waiting for proof (photo or questions), the ones waiting for your verifier,
  * and photos other people sent you to check.
  */
+/** Your @username, who checks your work, and picking someone by their @username. */
+function WhoChecks() {
+  const me = useAccount();
+  const data = useData();
+  const [typed, setTyped] = useState('');
+  if (me.mode === 'child' && me.parentId) return null;
+  const verifier = me.verifier ? findAccountByContact(data, me.verifier.contact) : undefined;
+
+  async function pick() {
+    const u = cleanUsername(typed);
+    if (!u) {
+      toast('Type their @username: 3–20 letters, numbers, dots or underscores');
+      return;
+    }
+    if (me.username === u) {
+      toast('Pick someone else. You can’t check your own work.');
+      return;
+    }
+    if ((await act('updateProfile', { patch: { verifier: { contact: `@${u}`, relation: 'Friend' } } })).ok) {
+      toast(`@${u} now checks your photos`);
+      setTyped('');
+    }
+  }
+
+  return (
+    <div className="card stack-12">
+      <div className="row" style={{ border: 'none', minHeight: 0 }}>
+        <span className="muted">Your username</span>
+        {me.username ? (
+          <span className="strong" data-testid="my-username">
+            @{me.username}
+          </span>
+        ) : (
+          <Link to="/profile" className="link-btn strong" style={{ fontSize: 14 }}>
+            Pick one
+          </Link>
+        )}
+      </div>
+      <div className="row" style={{ border: 'none', minHeight: 0 }}>
+        <span className="muted">Checks your work</span>
+        <span className="strong">
+          {me.verifier ? (verifier ? `${verifier.name}${verifier.username ? ` (@${verifier.username})` : ''}` : me.verifier.contact) : 'You, with a photo and questions'}
+        </span>
+      </div>
+      <form
+        className="add-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void pick();
+        }}
+      >
+        <div className="input-at" style={{ flexGrow: 1 }}>
+          <span aria-hidden="true">@</span>
+          <input
+            className="input"
+            aria-label="Verifier's username"
+            placeholder="their username"
+            autoCapitalize="none"
+            value={typed}
+            maxLength={21}
+            onChange={(e) => setTyped(e.target.value.replace(/^@/, '').toLowerCase())}
+          />
+        </div>
+        <button className="btn btn-primary" type="submit" disabled={!typed.trim()} style={{ width: 'auto', padding: '0 16px' }}>
+          {me.verifier ? 'Change' : 'Ask'}
+        </button>
+      </form>
+      {me.verifier && (
+        <button
+          className="link-btn muted"
+          style={{ fontSize: 14, alignSelf: 'flex-start', height: 'auto' }}
+          onClick={async () => {
+            if ((await act('updateProfile', { patch: { verifier: null } })).ok) toast('You’ll verify your own tasks with a photo and questions');
+          }}
+        >
+          Verify my own tasks instead
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function Verify() {
   const me = useAccount();
   const data = useData();
@@ -91,6 +182,8 @@ export function Verify() {
           Prove your finished tasks and check other people&apos;s.
         </span>
       </div>
+
+      <WhoChecks />
 
       <div className="stack">
         <h2 className="h2" style={{ marginBottom: 4 }}>

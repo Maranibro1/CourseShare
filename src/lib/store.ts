@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import { applyAction, type ActionName } from './actions';
-import { KaziError, createAccount, dailyTick, emptyData, normalizeContact, signIn as localSignIn, signOut as localSignOut } from './logic';
+import { KaziError, createAccount, dailyTick, emptyData, findAccountByContact, normalizeContact, signInKey, signIn as localSignIn, signOut as localSignOut } from './logic';
 import { deviceTimeZone } from './time';
 import type { Account, AppData } from './types';
 
@@ -349,11 +349,15 @@ export async function hashPassword(contact: string, password: string): Promise<s
 }
 
 /** Creates an account and signs in. Throws with a message to show when refused. */
-export async function signUp(input: { name: string; email: string; password: string }): Promise<void> {
+export async function signUp(input: { name: string; email: string; username?: string; password: string }): Promise<void> {
   const timeZone = deviceTimeZone();
   if (!SERVER_MODE) {
     const passwordHash = await hashPassword(input.email, input.password);
-    const result = createAccount(useStore.getState().data, { name: input.name, email: input.email, passwordHash, timeZone }, Date.now());
+    const result = createAccount(
+      useStore.getState().data,
+      { name: input.name, email: input.email, username: input.username, passwordHash, timeZone },
+      Date.now(),
+    );
     useStore.getState().setData(result.data);
     return;
   }
@@ -364,8 +368,12 @@ export async function signUp(input: { name: string; email: string; password: str
 
 export async function signIn(input: { email: string; password: string }): Promise<void> {
   if (!SERVER_MODE) {
-    const passwordHash = await hashPassword(input.email, input.password);
-    useStore.getState().setData(localSignIn(useStore.getState().data, input.email, passwordHash));
+    // On this phone, passwords are hashed with the account's email, so a username sign-in looks the email up first.
+    const data = useStore.getState().data;
+    const key = signInKey(input.email);
+    const account = findAccountByContact(data, key);
+    const passwordHash = await hashPassword(account?.email ?? input.email, input.password);
+    useStore.getState().setData(localSignIn(data, key, passwordHash));
     return;
   }
   const out = await api<{ token: string; state: AppData }>('/signin', { method: 'POST', json: { ...input, timeZone: deviceTimeZone() } });

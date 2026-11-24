@@ -118,6 +118,8 @@ export function Profile() {
   const data = useData();
   const navigate = useNavigate();
   const [help, setHelp] = useState(false);
+  const [nameSheet, setNameSheet] = useState(false);
+  const [newName, setNewName] = useState(me.username ?? '');
   const requests = requestsFor(data, me.id).filter((t) => !t.verifierId).length;
   const parent = me.parentId ? data.accounts[me.parentId] : null;
   const verifierName = me.verifier ? findAccountByContact(data, me.verifier.contact)?.name ?? me.verifier.contact : 'None';
@@ -129,10 +131,23 @@ export function Profile() {
         <Avatar name={me.name} solid size={80} />
         <span style={{ fontSize: 22, fontWeight: 700 }}>{me.name}</span>
         <span className="muted" style={{ fontSize: 15 }}>
+          {me.username ? `@${me.username} · ` : ''}
           {me.email}
         </span>
       </div>
       <div className="stack">
+        <button className="row row-btn" onClick={() => setNameSheet(true)}>
+          <span>Username</span>
+          <span className="value">{me.username ? `@${me.username}` : 'Pick one'}</span>
+        </button>
+        <Link to="/settings/messages" className="row row-btn">
+          <span>Lock screen messages</span>
+          <span className="value">{me.lockMessages?.length ? `${me.lockMessages.length} chosen` : 'Pick some'}</span>
+        </Link>
+        <Link to="/settings/blocks" className="row row-btn">
+          <span>Blocked times and focus timer</span>
+          <span className="value">{me.blocks?.length ? `${me.blocks.length} set` : 'None'}</span>
+        </Link>
         <div className="row">
           <span>Mode</span>
           <span className="value">{MODE_LABEL[me.mode]}</span>
@@ -182,6 +197,31 @@ export function Profile() {
       >
         Sign out
       </button>
+      <Sheet open={nameSheet} onClose={() => setNameSheet(false)} title="Your username">
+        <div className="input-at">
+          <span aria-hidden="true">@</span>
+          <input
+            className="input"
+            aria-label="New username"
+            value={newName}
+            maxLength={20}
+            autoCapitalize="none"
+            onChange={(e) => setNewName(e.target.value.replace(/^@/, '').toLowerCase())}
+          />
+        </div>
+        <span className="small">People type this to pick you as their verifier. 3–20 letters, numbers, dots or underscores.</span>
+        <button
+          className="btn btn-primary"
+          onClick={async () => {
+            if ((await act('updateProfile', { patch: { username: newName } })).ok) {
+              toast(`You're @${newName}`);
+              setNameSheet(false);
+            }
+          }}
+        >
+          Save
+        </button>
+      </Sheet>
       <Sheet open={help} onClose={() => setHelp(false)} title="How Kazikwanza works">
         <div className="stack-12 lead" style={{ fontSize: 15 }}>
           <p>

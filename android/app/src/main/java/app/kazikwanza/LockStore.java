@@ -60,6 +60,9 @@ final class LockStore {
     private long baseScrolls;
     private double baseSeconds;
     private String unlockTime = "";
+    /** Daily blocked windows and the focus timer, as sent by the app (see nativeRules in logic.ts). */
+    private JSONArray blocksJson = new JSONArray();
+    private JSONObject focusJson;
     private long ackSeq;
     private long nextSeq = 1;
     /** Events with seq at or below this have been handed to the app and must not change. */
@@ -81,6 +84,9 @@ final class LockStore {
         baseScrolls = payload.optLong("scrolls", 0);
         baseSeconds = payload.optDouble("screenSeconds", 0);
         unlockTime = payload.optString("unlockTime", "");
+        blocksJson = payload.optJSONArray("blocks");
+        if (blocksJson == null) blocksJson = new JSONArray();
+        focusJson = payload.optJSONObject("focus");
         long ack = payload.optLong("ackSeq", 0);
         // The app can only acknowledge what it has seen; ignore anything newer.
         ackSeq = Math.min(ack, nextSeq - 1);
@@ -111,6 +117,72 @@ final class LockStore {
     synchronized LockedApp appFor(String packageName) {
         if (!enabled || packageName == null) return null;
         return byPackage.get(packageName);
+    }
+
+    /**
+     * The app id that keeps {@code packageName} shut right now (a blocked
+     * window or the focus timer), or null. Blocks apply whatever the balance,
+     * and during the free unlock too.
+     */
+    synchronized String blockedAppId(String packageName, long now) {
+        if (!enabled || packageName == null) return null;
+        try {
+            if (focusJson != null && now < focusJson.optLong("until", 0)) {
+                String id = idFor(focusJson.optJSONArray("apps"), packageName);
+                if (id != null) return id;
+            }
+            for (int i = 0; i < blocksJson.length(); i++) {
+                JSONObject b = blocksJson.getJSONObject(i);
+                String id = idFor(b.optJSONArray("apps"), packageName);
+                if (id != null && windowOn(b, now)) return id;
+            }
+        } catch (JSONException ignored) {
+            // Our own JSON; a bad entry just doesn't block.
+        }
+        return null;
+    }
+
+    private static String idFor(JSONArray apps, String packageName) throws JSONException {
+        if (apps == null) return null;
+        for (int i = 0; i < apps.length(); i++) {
+            JSONObject a = apps.getJSONObject(i);
+            JSONArray pkgs = a.optJSONArray("packages");
+            if (pkgs == null) continue;
+            for (int j = 0; j < pkgs.length(); j++) if (packageName.equals(pkgs.getString(j))) return a.getString("id");
+        }
+        return null;
+    }
+
+    /** Is a daily window ("21:00" to "07:00" on the listed days, 0 = Sunday) on at {@code now}? */
+    static boolean windowOn(JSONObject b, long now) throws JSONException {
+        int start = minutes(b.optString("start", ""));
+        int end = minutes(b.optString("end", ""));
+        if (start < 0 || end < 0 || start == end) return false;
+        JSONArray days = b.optJSONArray("days");
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(now);
+        int today = c.get(Calendar.DAY_OF_WEEK) - 1;
+        int yesterday = (today + 6) % 7;
+        int t = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+        if (start < end) return has(days, today) && t >= start && t < end;
+        // Over midnight: started this evening, or started yesterday evening and runs until this morning.
+        return (has(days, today) && t >= start) || (has(days, yesterday) && t < end);
+    }
+
+    private static boolean has(JSONArray days, int day) {
+        if (days == null) return false;
+        for (int i = 0; i < days.length(); i++) if (days.optInt(i, -1) == day) return true;
+        return false;
+    }
+
+    private static int minutes(String hhmm) {
+        String[] parts = hhmm.split(":");
+        if (parts.length != 2) return -1;
+        try {
+            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     /** True from today's unlock time until midnight. */
@@ -202,6 +274,9 @@ final class LockStore {
             appsJson = s.optJSONArray("apps");
             if (appsJson == null) appsJson = new JSONArray();
             indexApps();
+            blocksJson = s.optJSONArray("blocks");
+            if (blocksJson == null) blocksJson = new JSONArray();
+            focusJson = s.optJSONObject("focus");
             baseScrolls = s.optLong("baseScrolls", 0);
             baseSeconds = s.optDouble("baseSeconds", 0);
             unlockTime = s.optString("unlockTime", "");
@@ -224,6 +299,8 @@ final class LockStore {
             JSONObject s = new JSONObject();
             s.put("enabled", enabled);
             s.put("apps", appsJson);
+            s.put("blocks", blocksJson);
+            if (focusJson != null) s.put("focus", focusJson);
             s.put("baseScrolls", baseScrolls);
             s.put("baseSeconds", baseSeconds);
             s.put("unlockTime", unlockTime);

@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
-import { PHOTO, onboardPersonal, signUp } from './helpers';
+import { PHOTO, onboardPersonal, proofPhoto, signIn, signUp } from './helpers';
 
 /** A fresh browser context is a separate phone: its own storage, its own sign-in. */
 async function phone(browser: Browser): Promise<Page> {
@@ -212,6 +212,7 @@ test('Claude checks a photo straight away, and grades question answers', async (
   await sam.getByRole('button', { name: 'Add task' }).click();
   await sam.getByRole('link', { name: /Read 20 pages/ }).click();
   await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  await proofPhoto(sam);
   const answer = async (texts: string[]) => {
     for (const [i, t] of texts.entries()) {
       await sam.getByLabel('Your answer').fill(t);
@@ -225,4 +226,46 @@ test('Claude checks a photo straight away, and grades question answers', async (
   await expect(sam.getByText('Tell me which book and chapter you read.')).toBeVisible();
   await answer(['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.']);
   await expect(sam.getByText('+50')).toBeVisible();
+});
+
+test('pick a verifier by @username, and sign in with a username', async ({ browser }) => {
+  const id = Date.now();
+  const emmaEmail = `emma.u${id}@example.com`;
+  const emma = await phone(browser);
+  await signUp(emma, 'Emma', emmaEmail);
+  await onboardPersonal(emma, null);
+  await emma.getByRole('link', { name: 'Verify', exact: true }).click();
+  const emmaName = (await emma.getByTestId('my-username').textContent())!.trim();
+
+  const sam = await phone(browser);
+  await signUp(sam, 'Sam', `sam.u${id}@example.com`);
+  await onboardPersonal(sam, null);
+  await sam.getByRole('link', { name: 'Verify', exact: true }).click();
+  await expect(sam.getByText('You, with a photo and questions')).toBeVisible();
+  await sam.getByLabel("Verifier's username").fill(emmaName);
+  await sam.getByRole('button', { name: 'Ask' }).click();
+  await expect(sam.getByText(`Emma (${emmaName})`)).toBeVisible();
+
+  // Sam sends a photo; Emma checks it on her own phone.
+  await sam.goto('/#/home');
+  await sam.getByRole('link', { name: 'Add task' }).click();
+  await sam.getByLabel('Task', { exact: true }).fill('Wash the car');
+  await sam.getByRole('button', { name: '20', exact: true }).click();
+  await sam.getByText(/Send a photo to Emma/).click();
+  await sam.getByRole('button', { name: 'Add task' }).click();
+  await sam.getByRole('link', { name: /Wash the car/ }).click();
+  await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  await sam.getByTestId('photo-input').setInputFiles(PHOTO);
+  await sam.getByRole('button', { name: 'Send for approval' }).click();
+  await expect(sam.getByRole('heading', { name: 'Sent to Emma' })).toBeVisible();
+
+  await emma.reload();
+  await emma.getByRole('link', { name: /Verify, 1 waiting/ }).click();
+  await emma.getByRole('button', { name: 'Approve' }).click();
+  await expect(emma.getByText('No photos waiting.')).toBeVisible();
+
+  // Emma signs in again with just her username.
+  const again = await phone(browser);
+  await signIn(again, emmaName.slice(1));
+  await expect(again.getByRole('heading', { name: 'Today' })).toBeVisible();
 });

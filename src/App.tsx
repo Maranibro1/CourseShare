@@ -10,6 +10,7 @@ import { ApproveProof, ChildHome, ChildRules, ChildTaskForm, ChildWeek, JoinFami
 import { Home } from './screens/Home';
 import { Chat, Messages } from './screens/Messages';
 import { AddVerifier, ChooseMode, Permissions, PickApps, UnlockTime } from './screens/Onboarding';
+import { Blocks, LockMessages } from './screens/Controls';
 import { Requests } from './screens/Requests';
 import { Verify } from './screens/Verify';
 import { Profile, Settings } from './screens/Settings';
@@ -30,6 +31,8 @@ const CHILD_ALLOWED = [
   '/screen-time',
   '/notifications',
   '/profile',
+  '/settings/messages',
+  '/settings/blocks',
   '/messages',
   '/messages/:id',
 ];
@@ -109,6 +112,8 @@ export default function App() {
               <Route path="/settings" element={<Settings />} />
               <Route path="/settings/verifier" element={<AddVerifier editing />} />
               <Route path="/profile" element={<Profile />} />
+              <Route path="/settings/messages" element={<LockMessages />} />
+              <Route path="/settings/blocks" element={<Blocks />} />
               <Route path="/requests" element={<Requests />} />
               <Route path="/verify" element={<Verify />} />
               <Route path="/messages" element={<Messages />} />
@@ -125,6 +130,7 @@ export default function App() {
               <Route path="/family/approve/:id" element={<ApproveProof />} />
               <Route path="/family/child/:childId" element={<ChildWeek />} />
               <Route path="/family/child/:childId/rules" element={<ChildRules />} />
+              <Route path="/family/child/:childId/blocks" element={<Blocks />} />
               <Route path="/child" element={<ChildHome />} />
 
               <Route path="*" element={<Navigate to="/" replace />} />

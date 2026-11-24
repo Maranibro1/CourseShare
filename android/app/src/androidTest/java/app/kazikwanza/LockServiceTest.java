@@ -352,6 +352,59 @@ public class LockServiceTest {
         return info == null || info.activityInfo == null || "android".equals(info.activityInfo.packageName) ? null : info.activityInfo.packageName;
     }
 
+    /* ───────── Blocked times and focus timers ───────── */
+
+    private void rulesWithBlock(JSONObject extra) throws JSONException {
+        JSONObject r = new JSONObject()
+            .put("enabled", true)
+            .put("apps", new JSONArray().put(app("tiktok", "scrolls", TIKTOK)))
+            .put("scrolls", 100)
+            .put("screenSeconds", 600)
+            .put("unlockTime", "")
+            .put("ackSeq", Long.MAX_VALUE);
+        for (java.util.Iterator<String> it = extra.keys(); it.hasNext(); ) {
+            String k = it.next();
+            r.put(k, extra.get(k));
+        }
+        store.sync(r);
+    }
+
+    private static JSONArray appRefs(String id, String pkg) throws JSONException {
+        return new JSONArray().put(new JSONObject().put("id", id).put("packages", new JSONArray().put(pkg)));
+    }
+
+    @Test
+    public void aFocusTimerShutsAnAppEvenWithScrollsLeft() throws Exception {
+        rulesWithBlock(new JSONObject().put("focus", new JSONObject().put("until", System.currentTimeMillis() + 120_000).put("apps", appRefs("tiktok", TIKTOK))));
+        Intent intent = context.getPackageManager().getLaunchIntentForPackage(TIKTOK);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        context.startActivity(intent);
+        assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
+        assertEquals("nothing was spent", 100, store.scrollsLeft());
+    }
+
+    @Test
+    public void aBlockedTimeShutsAnAppThatIsntEvenLocked() throws Exception {
+        // All day, every day; Minecraft isn't in the locked apps at all.
+        JSONObject allDay = new JSONObject()
+            .put("start", "00:00")
+            .put("end", "23:59")
+            .put("days", new JSONArray().put(0).put(1).put(2).put(3).put(4).put(5).put(6))
+            .put("apps", appRefs("minecraft", MINECRAFT));
+        rulesWithBlock(new JSONObject().put("blocks", new JSONArray().put(allDay)));
+        Intent intent = context.getPackageManager().getLaunchIntentForPackage(MINECRAFT);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        context.startActivity(intent);
+        assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
+    }
+
+    @Test
+    public void anEndedFocusTimerBlocksNothing() throws Exception {
+        rulesWithBlock(new JSONObject().put("focus", new JSONObject().put("until", System.currentTimeMillis() - 1_000).put("apps", appRefs("tiktok", TIKTOK))));
+        open(TIKTOK);
+        assertTrue("TikTok stays open", inFront(TIKTOK, 2_000));
+    }
+
     /* ───────── Screen time ───────── */
 
     @Test

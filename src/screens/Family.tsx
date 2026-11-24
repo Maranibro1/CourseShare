@@ -670,6 +670,9 @@ export function ChildWeek() {
       <Link to={`/family/child/${kid.id}/rules`} className="btn btn-secondary">
         Edit {kid.name}'s rules
       </Link>
+      <Link to={`/family/child/${kid.id}/blocks`} className="btn btn-secondary">
+        Blocked times and focus timer
+      </Link>
       <AdjustSheet key={adjust ?? 'none'} kid={kid} mode={adjust} onClose={() => setAdjust(null)} />
     </main>
   );

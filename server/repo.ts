@@ -8,7 +8,7 @@
  * number, so if two phones change the same row at once one of them
  * retries instead of silently overwriting the other.
  */
-import { normalizeContact } from '../src/lib/logic';
+import { contactKeysOf, normalizeContact } from '../src/lib/logic';
 import type { Account, AppData, AppNotification, LinkCode, Message, Task, TimeRequest } from '../src/lib/types';
 
 export interface Versions {
@@ -71,6 +71,7 @@ export function isEmpty(c: Changes): boolean {
 export function accountKeys(a: Account) {
   return {
     email_key: normalizeContact(a.email),
+    username_key: a.username ? `@${a.username}` : null,
     verifier_key: a.verifier ? normalizeContact(a.verifier.contact) : null,
     parent_id: a.parentId,
   };
@@ -95,7 +96,7 @@ export function subsetFor(full: AppData, actorId: string, opts: { code?: string 
   const me = full.accounts[actorId];
   const out: AppData = { version: 1, sessionId: null, accounts: {}, tasks: {}, notifications: [], linkCodes: [], timeRequests: [], messages: [] };
   if (!me) return out;
-  const meKey = normalizeContact(me.email);
+  const myKeys = new Set(contactKeysOf(me));
   const verKey = me.verifier ? normalizeContact(me.verifier.contact) : null;
   const all = Object.values(full.accounts);
   const add = (a: Account | undefined) => {
@@ -105,7 +106,13 @@ export function subsetFor(full: AppData, actorId: string, opts: { code?: string 
   add(me);
   for (const a of all) {
     const k = accountKeys(a);
-    if ((verKey && k.email_key === verKey) || k.verifier_key === meKey || a.id === me.parentId || a.parentId === actorId) add(a);
+    if (
+      (verKey && (k.email_key === verKey || k.username_key === verKey)) ||
+      (k.verifier_key !== null && myKeys.has(k.verifier_key)) ||
+      a.id === me.parentId ||
+      a.parentId === actorId
+    )
+      add(a);
   }
   const children = new Set(all.filter((a) => a.parentId === actorId).map((a) => a.id));
 
@@ -116,7 +123,7 @@ export function subsetFor(full: AppData, actorId: string, opts: { code?: string 
       children.has(k.owner_id) ||
       k.created_by === actorId ||
       k.verifier_id === actorId ||
-      k.verifier_key === meKey ||
+      (k.verifier_key !== null && myKeys.has(k.verifier_key)) ||
       k.approved_by === actorId
     ) {
       out.tasks[t.id] = t;
@@ -128,7 +135,7 @@ export function subsetFor(full: AppData, actorId: string, opts: { code?: string 
     for (const id of [k.owner_id, k.created_by, k.verifier_id, k.approved_by]) if (id) add(full.accounts[id]);
     if (k.verifier_key) taskVerifierKeys.add(k.verifier_key);
   }
-  for (const a of all) if (taskVerifierKeys.has(normalizeContact(a.email))) add(a);
+  for (const a of all) if (contactKeysOf(a).some((key) => taskVerifierKeys.has(key))) add(a);
 
   out.messages = full.messages.filter((m) => m.from === actorId || m.to === actorId);
   for (const m of out.messages) add(full.accounts[m.from === actorId ? m.to : m.from]);
@@ -187,7 +194,7 @@ export function diff(before: AppData, after: AppData, versions: Versions): Chang
 /** Everyone whose screen a set of changes affects, so their phones can refresh. */
 export function affectedBy(c: Changes, actorId: string, accounts: AppData['accounts']): string[] {
   const ids = new Set<string>([actorId]);
-  const byKey = new Map(Object.values(accounts).map((a) => [normalizeContact(a.email), a.id]));
+  const byKey = new Map(Object.values(accounts).flatMap((a) => contactKeysOf(a).map((key) => [key, a.id] as const)));
   for (const a of c.accounts) {
     ids.add(a.id);
     if (a.data.parentId) ids.add(a.data.parentId);
@@ -249,9 +256,10 @@ export class MemoryRepo implements Repo {
       const exists = !!this.data.accounts[a.id];
       if (a.version === null) {
         if (exists) throw new ConflictError();
-        const key = normalizeContact(a.data.email);
-        if (Object.values(this.data.accounts).some((x) => normalizeContact(x.email) === key)) throw new TakenError();
       } else if (!exists || (this.versions.accounts[a.id] ?? 1) !== a.version) throw new ConflictError();
+      // Emails, phones and usernames are each one person's.
+      const keys = contactKeysOf(a.data);
+      if (Object.values(this.data.accounts).some((x) => x.id !== a.id && contactKeysOf(x).some((k) => keys.includes(k)))) throw new TakenError();
     }
     for (const t of [...c.tasks, ...c.deletedTasks]) {
       const exists = !!this.data.tasks[t.id];
@@ -294,8 +302,9 @@ export class MemoryRepo implements Repo {
     await this.persist();
   }
 
-  async findAccount(emailKey: string): Promise<Account | null> {
-    return structuredClone(Object.values(this.data.accounts).find((a) => normalizeContact(a.email) === emailKey) ?? null);
+  /** By email or phone key, or "@username". */
+  async findAccount(key: string): Promise<Account | null> {
+    return structuredClone(Object.values(this.data.accounts).find((a) => contactKeysOf(a).includes(key)) ?? null);
   }
 
   async getSession(tokenKey: string) {

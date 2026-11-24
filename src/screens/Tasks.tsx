@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CameraIcon, CheckIcon, SendIcon } from '../components/Icons';
-import { BackButton, Row, Sheet, Thumb, useBack } from '../components/ui';
+import { BackButton, Row, Sheet, StoredPhoto, Thumb, useBack } from '../components/ui';
 import {
   MAX_REWARD,
   QUESTIONS_FALLBACK_MS,
@@ -17,7 +17,7 @@ import {
 import { compressImage, deletePhoto, savePhoto } from '../lib/photos';
 import { MIN_ANSWER_LENGTH, questionsFor } from '../lib/questions';
 import { SERVER_MODE, act, claudeVerdict, errorMessage, toast, useAccount, useClaudeOn, useData, useNow } from '../lib/store';
-import { formatAdded, formatClock, formatHoursMinutes, timeAgo } from '../lib/time';
+import { dayLabel, formatAdded, formatClock, formatHoursMinutes, timeAgo } from '../lib/time';
 import type { Account, Repeat, RewardKind, Task, VerifyMethod } from '../lib/types';
 
 export const homePath = (me: Account) => (me.mode === 'child' ? '/child' : '/home');
@@ -298,6 +298,19 @@ export function TaskDetail() {
         <Row label="Repeats" value={REPEAT_LABEL[task.repeat]} strong />
         {task.completions.length > 0 && <Row label="Times completed" value={task.completions.length} strong />}
       </div>
+      {task.lastProof && (
+        <div className="stack-12" data-testid="proof">
+          <h2 className="h2">{isOwner ? 'Your proof' : 'Their proof'}</h2>
+          <span className="small">{dayLabel(task.lastProof.at)}</span>
+          {task.lastProof.photo && <StoredPhoto taskId={task.id} height={180} label={`Photo of ${task.title}`} />}
+          {task.lastProof.answers.map((x, i) => (
+            <div key={i} className="stack-4">
+              <span className="small">{x.q}</span>
+              <span>{x.a}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="spacer" />
       <div className="actions">
         {isOwner && (task.status === 'todo' || task.status === 'redo') && (
@@ -529,7 +542,70 @@ export function Questions() {
   const [claudeNote, setClaudeNote] = useState<string | null>(null);
   const [honest, setHonest] = useState(false);
   const [sending, setSending] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [photoSaved, setPhotoSaved] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   if (!task) return <MissingTask />;
+  // Answering instead of waiting for a verifier: the photo was already sent.
+  const needsPhoto = task.status !== 'pending' && !photoSaved;
+
+  async function pick(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      setPhoto(await compressImage(file));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not read that photo');
+    }
+  }
+
+  async function usePhoto() {
+    if (!photo || !task) return;
+    setSending(true);
+    try {
+      await savePhoto(task.id, photo);
+      setPhotoSaved(true);
+    } catch (err) {
+      toast(SERVER_MODE ? errorMessage(err) : 'Could not save the photo on this phone. Free up some space and try again.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (needsPhoto) {
+    return (
+      <main className="screen">
+        <BackButton fallback={`/task/${task.id}`} />
+        <div className="stack-6">
+          <span className="muted" style={{ fontSize: 14 }}>
+            {task.title}
+          </span>
+          <h1 className="h1-sm">First, a photo of what you did</h1>
+          <span className="muted" style={{ fontSize: 15 }}>
+            Then answer 3 quick questions. Your photo and answers are kept with the task.
+          </span>
+        </div>
+        <button type="button" className="photo-drop" onClick={() => fileRef.current?.click()} aria-label={photo ? 'Retake photo' : 'Take photo'}>
+          {photo ? (
+            <img src={photo} alt={`Proof for ${task.title}`} />
+          ) : (
+            <>
+              <CameraIcon size={36} color="#52525B" />
+              <span className="muted" style={{ fontSize: 14 }}>
+                Tap to take a photo
+              </span>
+            </>
+          )}
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={pick} className="sr-only" data-testid="photo-input" />
+        <div className="spacer" />
+        <button className="btn btn-primary" onClick={usePhoto} disabled={!photo || sending}>
+          {sending ? 'Saving…' : 'Next: the questions'}
+        </button>
+      </main>
+    );
+  }
 
   const questions = questionsFor(task.title);
   const total = questions.length;

@@ -20,6 +20,9 @@ create table if not exists public.kazi_accounts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Added later: the @username people can find each other by. Safe to run on an existing database.
+alter table public.kazi_accounts add column if not exists username_key text;
+create unique index if not exists kazi_accounts_username_key on public.kazi_accounts (username_key);
 create index if not exists kazi_accounts_verifier_key on public.kazi_accounts (verifier_key);
 create index if not exists kazi_accounts_parent_id on public.kazi_accounts (parent_id);
 
@@ -115,8 +118,9 @@ as $$
   base_accounts as (
     select a.* from kazi_accounts a, me
     where a.id = me.id
-       or (me.verifier_key is not null and a.email_key = me.verifier_key)
+       or (me.verifier_key is not null and (a.email_key = me.verifier_key or a.username_key = me.verifier_key))
        or a.verifier_key = me.email_key
+       or (me.username_key is not null and a.verifier_key = me.username_key)
        or a.id = me.parent_id
        or a.parent_id = me.id
   ),
@@ -130,6 +134,7 @@ as $$
        or t.created_by = me.id
        or t.verifier_id = me.id
        or t.verifier_key = me.email_key
+       or (me.username_key is not null and t.verifier_key = me.username_key)
        or t.approved_by = me.id
   ),
   msgs as (
@@ -158,6 +163,7 @@ as $$
     select * from base_accounts
     union select a.* from kazi_accounts a where a.id in (select id from ref_ids)
     union select a.* from kazi_accounts a where a.email_key in (select verifier_key from tasks where verifier_key is not null)
+    union select a.* from kazi_accounts a where a.username_key in (select verifier_key from tasks where verifier_key is not null)
   )
   select jsonb_build_object(
     'data', jsonb_build_object(
@@ -181,7 +187,7 @@ $$;
 
 -- Applies one request's changes in a single transaction. If an account or task
 -- changed since it was loaded, raises 'kazi_conflict' and nothing is saved (the
--- Edge Function then retries). A new account whose email/phone is taken raises 'kazi_taken'.
+-- Edge Function then retries). An email, phone or username that's already taken raises 'kazi_taken'.
 create or replace function public.kazi_commit(p jsonb)
 returns void
 language plpgsql
@@ -195,16 +201,20 @@ begin
   for r in select * from jsonb_array_elements(coalesce(p->'accounts', '[]'::jsonb)) loop
     if jsonb_typeof(r->'version') is distinct from 'number' then
       begin
-        insert into kazi_accounts (id, email_key, verifier_key, parent_id, version, data)
-        values (r->>'id', r->>'email_key', r->>'verifier_key', r->>'parent_id', 1, r->'data');
+        insert into kazi_accounts (id, email_key, username_key, verifier_key, parent_id, version, data)
+        values (r->>'id', r->>'email_key', r->>'username_key', r->>'verifier_key', r->>'parent_id', 1, r->'data');
       exception when unique_violation then
         raise exception 'kazi_taken';
       end;
     else
-      update kazi_accounts
-         set email_key = r->>'email_key', verifier_key = r->>'verifier_key', parent_id = r->>'parent_id',
-             data = r->'data', version = version + 1, updated_at = now()
-       where id = r->>'id' and version = (r->>'version')::integer;
+      begin
+        update kazi_accounts
+           set email_key = r->>'email_key', username_key = r->>'username_key', verifier_key = r->>'verifier_key', parent_id = r->>'parent_id',
+               data = r->'data', version = version + 1, updated_at = now()
+         where id = r->>'id' and version = (r->>'version')::integer;
+      exception when unique_violation then
+        raise exception 'kazi_taken';
+      end;
       get diagnostics n = row_count;
       if n = 0 then raise exception 'kazi_conflict'; end if;
     end if;
@@ -283,7 +293,8 @@ language sql
 stable
 set search_path = public
 as $$
-  select data from kazi_accounts where email_key = p_email_key;
+  -- p_email_key is an email or phone key, or "@username".
+  select data from kazi_accounts where email_key = p_email_key or username_key = p_email_key limit 1;
 $$;
 
 create or replace function public.kazi_session_get(p_key text)

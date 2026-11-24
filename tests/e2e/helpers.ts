@@ -13,16 +13,22 @@ export const PHOTO = {
 export async function signUp(page: Page, name: string, email: string, password = 'password1') {
   await page.goto('/');
   await page.getByRole('link', { name: 'Get started' }).click();
-  await page.getByLabel('Name').fill(name);
+  await page.getByLabel('Name', { exact: true }).fill(name);
   await page.getByLabel('Email or phone').fill(email);
+  await page.getByLabel('Username', { exact: true }).fill(usernameFor(email));
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByRole('heading', { name: 'How will you use Kazikwanza?' })).toBeVisible();
 }
 
+/** A username made from the email: "Emma+x@example.com" → "emmax". */
+export function usernameFor(email: string): string {
+  return email.split('@')[0].toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, 20).padEnd(3, '0');
+}
+
 export async function signIn(page: Page, email: string, password = 'password1') {
   await page.goto('/#/signin');
-  await page.getByLabel('Email or phone').fill(email);
+  await page.getByLabel('Email, phone or username').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
@@ -44,7 +50,7 @@ export async function onboardPersonal(page: Page, verifier: string | null) {
   await page.getByText('No free unlock, only earn scrolls').click();
   await page.getByRole('button', { name: 'Continue' }).click();
   if (verifier) {
-    await page.getByLabel('Their email or phone').fill(verifier);
+    await page.getByLabel('Their @username, email or phone').fill(verifier);
     await page.getByRole('button', { name: 'Sister' }).click();
     await page.getByRole('button', { name: 'Send invite' }).click();
   } else {
@@ -62,4 +68,11 @@ export async function addTask(page: Page, title: string, reward: string, verify:
   else await page.getByText('Answer a few questions').click();
   await page.getByRole('button', { name: 'Add task' }).click();
   await expect(page.getByRole('link', { name: new RegExp(title) })).toBeVisible();
+}
+
+/** The first step of a questions task: a photo of what was done. */
+export async function proofPhoto(page: Page) {
+  await expect(page.getByRole('heading', { name: 'First, a photo of what you did' })).toBeVisible();
+  await page.getByTestId('photo-input').setInputFiles(PHOTO);
+  await page.getByRole('button', { name: 'Next: the questions' }).click();
 }

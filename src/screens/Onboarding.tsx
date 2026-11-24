@@ -5,7 +5,7 @@ import { BackButton, StepHeader } from '../components/ui';
 import { AppList } from '../components/AppList';
 import { setDeviceOwner } from '../lib/device';
 import { appLink } from '../lib/install';
-import { isValidContact, normalizeContact } from '../lib/logic';
+import { isContactOf, isValidPersonContact } from '../lib/logic';
 import { KaziLock, isNativeAndroid, useLockStatus } from '../lib/native';
 import { formatClock, formatClockShort } from '../lib/time';
 import { act, toast, useAccount } from '../lib/store';
@@ -354,19 +354,21 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
 
   async function invite() {
     setError('');
-    if (!isValidContact(contact)) {
-      setError('Enter a valid email or phone number');
+    if (!isValidPersonContact(contact)) {
+      setError('Enter their @username, email or phone number');
       return;
     }
-    if (normalizeContact(contact) === normalizeContact(me.email)) {
+    if (isContactOf(me, contact)) {
       setError('Pick someone else. You can’t check your own work.');
       return;
     }
     const { ok } = await act('updateProfile', { patch: { verifier: { contact: contact.trim(), relation }, onboarded: true } });
     if (!ok) return;
     const where = appLink();
+    const byUsername = contact.trim().startsWith('@');
     const text = `${me.name} added you as their Kazikwanza verifier. Get Kazikwanza${where ? ` at ${where}` : ''} and sign up with ${contact.trim()} to check their tasks and message them.`;
-    if (navigator.share) {
+    // Someone picked by @username is already on Kazikwanza; anyone else gets an invite to share.
+    if (navigator.share && !byUsername) {
       try {
         await navigator.share({ title: 'Kazikwanza', text });
       } catch {
@@ -382,11 +384,11 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
       <BackButton fallback={editing ? '/settings' : '/onboarding/unlock'} />
       <div className="stack-8">
         <h1 className="h1">Who will check your work?</h1>
-        <p className="lead">Add a friend or family member. They'll approve photos of your finished tasks.</p>
+        <p className="lead">Add a friend or family member by their @username. They'll approve photos of your finished tasks in the app.</p>
       </div>
       <div className="field">
         <label className="label" htmlFor="contact">
-          Their email or phone
+          Their @username, email or phone
         </label>
         <input
           id="contact"
@@ -395,7 +397,7 @@ export function AddVerifier({ editing = false }: { editing?: boolean }) {
           onChange={(e) => setContact(e.target.value)}
           inputMode="email"
           autoCapitalize="none"
-          placeholder="emma@example.com"
+          placeholder="@emma or emma@example.com"
         />
         {error && (
           <p className="error" role="alert">

@@ -28,6 +28,34 @@ export interface LedgerEntry {
   appId?: string;
 }
 
+/** A daily window when some apps can't be opened at all. */
+export interface BlockSchedule {
+  id: string;
+  name: string;
+  /** App ids, as in lockedApps. */
+  apps: string[];
+  /** "21:00" */
+  start: string;
+  /** "07:00"; earlier than start means it runs over midnight. */
+  end: string;
+  /** 0 = Sunday … 6 = Saturday: the days the window starts on. */
+  days: number[];
+}
+
+/** A countdown: these apps stay shut until `until`. */
+export interface FocusTimer {
+  apps: string[];
+  startedAt: number;
+  until: number;
+}
+
+/** What someone showed to finish a questions task: their answers, and that they took a photo. */
+export interface Proof {
+  at: number;
+  answers: { q: string; a: string }[];
+  photo: boolean;
+}
+
 /** An app the phone reported as installed: its package name and the name on its icon. */
 export interface PhoneApp {
   pkg: string;
@@ -46,6 +74,8 @@ export interface Account {
   name: string;
   email: string;
   passwordHash: string;
+  /** Lower-case @name other people can find you by (stored without the @). */
+  username?: string;
   mode: Mode;
   createdAt: number;
   onboarded: boolean;
@@ -75,6 +105,12 @@ export interface Account {
   notifyKey?: string;
   /** Apps installed on this person's phone, so they (or their parent) can give any of them a screen-time limit. */
   phoneApps?: PhoneApp[];
+  /** Daily windows when chosen apps can't be opened at all. */
+  blocks?: BlockSchedule[];
+  /** A running focus timer, if any. */
+  focus?: FocusTimer | null;
+  /** Words of encouragement shown on the lock screen, picked or written by the person. */
+  lockMessages?: string[];
   /** How many times Claude checked this person's proof today, to keep costs bounded. */
   claudeChecks?: { day: string; count: number };
 }
@@ -105,6 +141,8 @@ export interface Task {
   remindedAt: number | null;
   /** Log of completions, so repeating tasks keep their history. */
   completions: number[];
+  /** The answers (and photo) last given to finish this task with questions. */
+  lastProof?: Proof;
 }
 
 export interface AppNotification {

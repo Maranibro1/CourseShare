@@ -1823,3 +1823,40 @@ p {
   background: var(--green);
   color: #fff;
 }
+
+.cheer {
+  font-size: 17px;
+  font-style: italic;
+  color: var(--green-dark, #166534);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.input-at {
+  position: relative;
+}
+
+.input-at > span {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 16px;
+  pointer-events: none;
+}
+
+.input-at > .input {
+  padding-left: 30px;
+}
+
+.add-row {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.link-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

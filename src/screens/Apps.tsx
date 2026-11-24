@@ -19,7 +19,8 @@ import {
 } from '../lib/logic';
 import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { KaziLock, isNativeAndroid, pumpNative } from '../lib/native';
-import { formatClock, formatMinSec } from '../lib/time';
+import { formatClock, formatMinSec, formatTimeOfDay } from '../lib/time';
+import { activeBlock, type ActiveBlock } from '../lib/blocks';
 import type { Account } from '../lib/types';
 import { homePath } from './Tasks';
 
@@ -28,6 +29,7 @@ function statusText(me: Account, app: LockableApp, now: number): string {
   if (access === 'not-locked') return 'Not locked';
   if (access === 'free') return 'Free now';
   if (access === 'locked') return 'Locked';
+  if (access === 'blocked') return 'Blocked';
   if (app.kind === 'mixed') return `${me.scrolls} · ${minutesLeft(me, now)} min`;
   return app.kind === 'scrolls' ? `${me.scrolls} scrolls` : `${minutesLeft(me, now)} min`;
 }
@@ -55,7 +57,7 @@ export function Launcher() {
   const navigate = useNavigate();
 
   async function open(app: LockableApp, access: ReturnType<typeof accessFor>) {
-    if (access === 'locked') {
+    if (access === 'locked' || access === 'blocked') {
       navigate(`/locked/${app.id}`);
       return;
     }
@@ -78,7 +80,7 @@ export function Launcher() {
           const access = accessFor(me, a.id, now);
           return (
             <button key={a.id} onClick={() => open(a, access)} aria-label={`Open ${a.name}`}>
-              <AppIcon app={a} locked={access === 'locked'} />
+              <AppIcon app={a} locked={access === 'locked' || access === 'blocked'} />
               <span>{a.name}</span>
               <span className="app-status">{statusText(me, a, now)}</span>
             </button>
@@ -206,14 +208,21 @@ function TimedApp({ app, onClose }: { app: LockableApp; onClose?: () => void }) 
   }, []);
 
   const closing = useRef(false);
+  const blockedNow = accessFor(me, app.id, now) === 'blocked';
   useEffect(() => {
+    // A blocked time or focus timer starting while the app is open closes it.
+    if (session && blockedNow && !closing.current) {
+      closing.current = true;
+      void act('closeSession').then(() => navigate(`/locked/${app.id}`, { replace: true }));
+      return;
+    }
     if (session && !session.free && remaining <= 0 && !closing.current) {
       closing.current = true;
       void act('closeSession', { at: session.startedAt + me.screenSeconds * 1000 }).then(() =>
         navigate(`/locked/${app.id}${part}`, { replace: true }),
       );
     }
-  }, [session, remaining, me.screenSeconds, app.id, navigate, part]);
+  }, [session, remaining, me.screenSeconds, app.id, navigate, part, blockedNow]);
 
   return (
     <main className="screen centered" style={{ background: app.color, color: '#fff' }}>
@@ -249,7 +258,9 @@ export function AppView() {
   const me = useAccount();
   const app = appFor(me, appId);
   const navigate = useNavigate();
-  const lockedAtOpen = useRef(app ? accessFor(me, app.id, Date.now()) === 'locked' && me.session?.appId !== app.id : false);
+  const lockedAtOpen = useRef(
+    app ? accessFor(me, app.id, Date.now()) === 'blocked' || (accessFor(me, app.id, Date.now()) === 'locked' && me.session?.appId !== app.id) : false,
+  );
 
   useEffect(() => {
     if (lockedAtOpen.current) navigate(`/locked/${appId}`, { replace: true });
@@ -306,6 +317,50 @@ function MixedApp({ app }: { app: LockableApp }) {
 
 /* ───────── Locked ───────── */
 
+/** Shown when nobody has picked their own lock-screen messages yet. */
+export const DEFAULT_CHEERS = ['Do the work first. Then scroll.', 'Future you will thank you.', 'One task at a time. You’ve got this.'];
+
+function pickMessage(messages: string[] | undefined): string {
+  const list = messages && messages.length > 0 ? messages : DEFAULT_CHEERS;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function countdown(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+/** A blocked time or focus timer: the app can't open at all until it ends, so no unlocks are offered. */
+function Blocked({ app, block, cheer, now }: { app: LockableApp; block: ActiveBlock; cheer: string; now: number }) {
+  const me = useAccount();
+  return (
+    <main className="screen centered">
+      <div className="stack center" style={{ gap: 16 }}>
+        <div className="icon-badge">
+          <TimerIcon size={32} color="#15803D" />
+        </div>
+        <h1 className="h1">{app.name} is blocked</h1>
+        <p className="lead">
+          {block.kind === 'focus' ? 'Your focus timer is running.' : `${block.label} is on.`} It opens again at {formatTimeOfDay(block.until)}.
+        </p>
+        <span className="big-number" data-testid="block-countdown" style={{ fontSize: 44 }}>
+          {countdown(block.until - now)}
+        </span>
+        <p className="cheer">“{cheer}”</p>
+      </div>
+      <div className="spacer" />
+      <div className="actions">
+        <Link to={homePath(me)} className="btn btn-primary">
+          See my tasks
+        </Link>
+      </div>
+    </main>
+  );
+}
+
 export function Locked() {
   const { appId = '' } = useParams();
   const [search] = useSearchParams();
@@ -314,7 +369,10 @@ export function Locked() {
   const now = useNow(1000);
   const navigate = useNavigate();
   const app = appFor(me, appId);
+  const [cheer] = useState(() => pickMessage(me.lockMessages));
   if (!app) return null;
+  const block = activeBlock(me, app.id, now);
+  if (block) return <Blocked app={app} block={block} cheer={cheer} now={now} />;
 
   // For YouTube, which part ran out: Shorts (scrolls) or videos (screen time).
   const partParam = search.get('part');
@@ -354,6 +412,7 @@ export function Locked() {
         </div>
         <h1 className="h1">{access === 'locked' ? `${label} ${plural ? 'are' : 'is'} locked` : `${app.name} is open`}</h1>
         <p className="lead">{access === 'locked' ? body : 'You have enough to open it now.'}</p>
+        {access === 'locked' && <p className="cheer">“{cheer}”</p>}
       </div>
       {access === 'locked' &&
         (suggested.length > 0 ? (

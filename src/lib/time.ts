@@ -108,7 +108,7 @@ export function startOfDay(t: number = Date.now()): number {
 }
 
 /** 0 = Sunday … 6 = Saturday, in the current zone. */
-function weekdayOf(t: number): number {
+export function weekdayOf(t: number): number {
   if (zone) {
     const p = zoneParts(t, zone);
     return new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay();

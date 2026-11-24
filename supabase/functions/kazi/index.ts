@@ -77,14 +77,15 @@ function claudeChecker(apiKey) {
 Does this photo show the task done?`
       }
     ]),
-    checkAnswers: (task2, qa) => ask([
+    checkAnswers: (task2, qa, photo) => ask([
+      ...photo ? [{ type: "image", source: { type: "base64", media_type: photo.type, data: toBase64(photo.bytes) } }] : [],
       {
         type: "text",
         text: `Task: ${JSON.stringify(task2.title)}
-The person answered these questions to show they did it:
+${photo ? "The photo above shows what they did. " : ""}The person answered these questions to show they did it:
 ${qa.map((x, i) => `${i + 1}. ${x.question}
 Answer: ${JSON.stringify(x.answer)}`).join("\n")}
-Do the answers show they genuinely did the task?`
+Do the photo and answers show they genuinely did the task?`
       }
     ])
   };
@@ -154,6 +155,59 @@ function normalizePhoneApps(list) {
     out.set(p.pkg, { pkg: p.pkg, name });
   }
   return [...out.values()].sort((x, y) => x.name.localeCompare(y.name) || x.pkg.localeCompare(y.pkg)).slice(0, MAX_PHONE_APPS);
+}
+
+// src/lib/questions.ts
+var TOPICS = [
+  {
+    match: /\b(read|reading|book|pages?|chapter|novel|article)\b/i,
+    questions: [
+      "What did you read? Name the book, chapter or article.",
+      "What was the main idea of what you read?",
+      "Write one thing you learned or want to remember."
+    ]
+  },
+  {
+    match: /\b(revise|revision|study|studying|notes|exam|kcse|homework|assignment|essay|maths?|statistics|science|lecture|coursework|practice)\b/i,
+    questions: [
+      "Which topic or questions did you work on?",
+      "What was the hardest part, and how did you get through it?",
+      "Explain one thing from this task in your own words."
+    ]
+  },
+  {
+    match: /\b(gym|run|running|walk|workout|exercise|training|football|swim|yoga|jog|push-?ups?)\b/i,
+    questions: [
+      "What exercises did you do?",
+      "How long did you train for, and where?",
+      "How did your body feel afterwards?"
+    ]
+  },
+  {
+    match: /\b(clean|tidy|wash|dishes|laundry|bed|sweep|mop|chores?|room|kitchen|cook|cooking)\b/i,
+    questions: [
+      "What exactly did you clean or sort out?",
+      "What was the messiest part before you started?",
+      "How long did it take you?"
+    ]
+  },
+  {
+    match: /\b(invoice|email|client|meeting|report|design|code|coding|work|project|presentation|call)\b/i,
+    questions: [
+      "What did you finish? Be specific.",
+      "Who is it for, and what is the next step?",
+      "What took the most time?"
+    ]
+  }
+];
+var GENERIC = [
+  "What exactly did you do for this task?",
+  "How long did it take, and where were you?",
+  "What was the hardest part?"
+];
+function questionsFor(title) {
+  const topic = TOPICS.find((t) => t.match.test(title));
+  return topic ? topic.questions : GENERIC;
 }
 
 // src/lib/time.ts
@@ -266,6 +320,33 @@ function formatClock(hhmm) {
   return `${h12}:${pad(m)} ${suffix}`;
 }
 
+// src/lib/blocks.ts
+var MAX_BLOCKS = 10;
+var MAX_FOCUS_MINUTES = 12 * 60;
+function scheduleEndsAt(b, now) {
+  if (b.start === b.end) return null;
+  const day = weekdayOf(now);
+  const start = clockToday(b.start, now);
+  const end = clockToday(b.end, now);
+  if (b.start < b.end) return b.days.includes(day) && now >= start && now < end ? end : null;
+  if (b.days.includes(day) && now >= start) return clockToday(b.end, now + DAY);
+  if (b.days.includes((day + 6) % 7) && now < end) return end;
+  return null;
+}
+function activeBlock(a, appId2, now) {
+  let best = null;
+  if (a.focus && now < a.focus.until && a.focus.apps.includes(appId2)) best = { until: a.focus.until, label: "Focus timer", kind: "focus" };
+  for (const b of a.blocks ?? []) {
+    if (!b.apps.includes(appId2)) continue;
+    const until = scheduleEndsAt(b, now);
+    if (until !== null && (!best || until > best.until)) best = { until, label: b.name, kind: "schedule" };
+  }
+  return best;
+}
+function activeSchedules(a, now) {
+  return (a.blocks ?? []).filter((b) => scheduleEndsAt(b, now) !== null);
+}
+
 // src/lib/logic.ts
 var EMERGENCY_PER_WEEK = 3;
 var EMERGENCY_SCROLLS = 10;
@@ -300,8 +381,26 @@ function newId(prefix) {
 var clone = (data) => structuredClone(data);
 function normalizeContact(s) {
   const t = s.trim().toLowerCase();
+  if (t.startsWith("@")) return `@${t.slice(1)}`;
   if (/^[+\d][\d\s-]*$/.test(t)) return t.replace(/[\s-]/g, "");
   return t;
+}
+var USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
+function cleanUsername(s) {
+  const t = s.trim().replace(/^@/, "").toLowerCase();
+  return USERNAME_RE.test(t) ? t : null;
+}
+function isUsernameContact(s) {
+  return s.trim().startsWith("@") && cleanUsername(s) !== null;
+}
+function contactKeysOf(a) {
+  return a.username ? [normalizeContact(a.email), `@${a.username}`] : [normalizeContact(a.email)];
+}
+function isContactOf(a, contact) {
+  return !!contact && contactKeysOf(a).includes(normalizeContact(contact));
+}
+function isValidPersonContact(s) {
+  return isValidContact(s) || isUsernameContact(s);
 }
 function isValidContact(s) {
   const t = s.trim();
@@ -319,10 +418,14 @@ function task(data, id2) {
   if (!t) throw new KaziError("Task not found");
   return t;
 }
+function signInKey(typed) {
+  if (isValidContact(typed)) return normalizeContact(typed);
+  const u = cleanUsername(typed);
+  return u ? `@${u}` : normalizeContact(typed);
+}
 function findAccountByContact(data, contact) {
   if (!contact) return void 0;
-  const key2 = normalizeContact(contact);
-  return Object.values(data.accounts).find((a) => normalizeContact(a.email) === key2);
+  return Object.values(data.accounts).find((a) => isContactOf(a, contact));
 }
 function pushLedger(a, entry, id2 = newId("l")) {
   a.ledger.unshift({ id: id2, ...entry });
@@ -346,10 +449,18 @@ function createAccount(data, input, now) {
   if (name.length > 40) throw new KaziError("Keep your name under 40 characters");
   if (!isValidContact(input.email)) throw new KaziError("Enter a valid email or phone number");
   if (findAccountByContact(data, input.email)) throw new KaziError("An account with this email or phone already exists. Sign in instead.");
+  let username;
+  if (input.username !== void 0 && input.username.trim() !== "") {
+    const u = cleanUsername(input.username);
+    if (!u) throw new KaziError("Usernames are 3\u201320 letters, numbers, dots or underscores");
+    if (findAccountByContact(data, `@${u}`)) throw new KaziError("That username is taken. Try another.");
+    username = u;
+  }
   const next = clone(data);
   const id2 = newId("u");
   next.accounts[id2] = {
     id: id2,
+    ...username ? { username } : {},
     name,
     email: input.email.trim(),
     passwordHash: input.passwordHash,
@@ -386,6 +497,7 @@ function freeUnlockActive(a, now) {
 }
 function accessFor(a, appId2, now) {
   const app = appFor(a, appId2);
+  if (app && activeBlock(a, appId2, now)) return "blocked";
   if (!app || !a.lockedApps.includes(appId2)) return "not-locked";
   if (freeUnlockActive(a, now)) return "free";
   const scrolls = a.scrolls > 0;
@@ -410,6 +522,7 @@ function startSession(data, accountId, appId2, now) {
   let next = data.accounts[accountId].session ? closeSession(data, accountId, now) : data;
   const a0 = account(next, accountId);
   const access = accessFor(a0, appId2, now);
+  if (access === "blocked") throw new KaziError(`${app.name} is blocked right now`);
   if (access === "locked" || access === "balance" && remainingSeconds(a0, now) <= 0) throw new KaziError(`${app.name} is locked`);
   next = clone(next);
   account(next, accountId).session = { appId: appId2, startedAt: now, free: access !== "balance" };
@@ -435,7 +548,7 @@ function spendScroll(data, accountId, appId2, sessionKey, now) {
   const a0 = account(data, accountId);
   const access = accessFor(a0, appId2, now);
   if (access === "free" || access === "not-locked") return { data, result: "free" };
-  if (access === "locked" || a0.scrolls <= 0) return { data, result: "locked" };
+  if (access === "locked" || access === "blocked" || a0.scrolls <= 0) return { data, result: "locked" };
   const next = clone(data);
   const a = account(next, accountId);
   a.scrolls -= 1;
@@ -601,7 +714,7 @@ function canApprove(data, t, accountId) {
   if (t.verify !== "photo" || t.ownerId === accountId) return false;
   if (t.verifierId) return t.verifierId === accountId;
   const me2 = data.accounts[accountId];
-  return !!me2 && !!t.verifierContact && normalizeContact(me2.email) === normalizeContact(t.verifierContact);
+  return !!me2 && !!t.verifierContact && isContactOf(me2, t.verifierContact);
 }
 function submitPhoto(data, taskId, ownerId, now) {
   const t0 = task(data, taskId);
@@ -655,6 +768,8 @@ function completeWithQuestions(data, taskId, ownerId, answers, now) {
   const next = clone(data);
   const t = task(next, taskId);
   if (fallback) t.verify = "questions";
+  const qs = questionsFor(t.title);
+  t.lastProof = { at: now, answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2e3) })), photo: true };
   award(next, t, null, now);
   return next;
 }
@@ -875,6 +990,49 @@ function adjustChildBalance(data, parentId, childId, kind, amount, now) {
   notify(next, childId, change > 0 ? `${parent.name} gave you ${what}` : `${parent.name} took away ${what}`, "/child", now);
   return next;
 }
+function blockTarget(data, actorId, targetId) {
+  const target = account(data, targetId);
+  if (targetId === actorId) return { target, byParent: false };
+  if (target.parentId === actorId) return { target, byParent: true };
+  throw new KaziError("You can only change your own blocks, or your child\u2019s");
+}
+function setBlocks(data, actorId, targetId, blocks, now) {
+  const { target, byParent } = blockTarget(data, actorId, targetId);
+  if (!byParent && target.parentId && target.mode === "child") throw new KaziError("Your parent sets your blocked times");
+  if (blocks.length > MAX_BLOCKS) throw new KaziError(`You can have up to ${MAX_BLOCKS} blocked times`);
+  for (const b of blocks) {
+    if (!b.name.trim()) throw new KaziError("Give each blocked time a name");
+    if (b.apps.length === 0) throw new KaziError(`Pick at least one app to block for \u201C${b.name}\u201D`);
+    if (b.days.length === 0) throw new KaziError(`Pick at least one day for \u201C${b.name}\u201D`);
+    if (b.start === b.end) throw new KaziError("The start and end time must be different");
+  }
+  if (!byParent) {
+    for (const old of activeSchedules(target, now)) {
+      const kept = blocks.find((b) => b.id === old.id);
+      const same2 = kept && kept.start === old.start && kept.end === old.end && old.days.every((d) => kept.days.includes(d)) && old.apps.every((x) => kept.apps.includes(x));
+      if (!same2) throw new KaziError(`\u201C${old.name}\u201D is on right now. You can change it once it ends.`);
+    }
+  }
+  const next = clone(data);
+  account(next, targetId).blocks = blocks.map((b) => ({ ...b, name: b.name.trim(), apps: [...new Set(b.apps)], days: [...new Set(b.days)].sort() }));
+  if (byParent) notify(next, targetId, `${account(next, actorId).name} updated your blocked times`, "/child", now);
+  return next;
+}
+function startFocus(data, actorId, targetId, apps, minutes, now) {
+  const { byParent } = blockTarget(data, actorId, targetId);
+  if (apps.length === 0) throw new KaziError("Pick at least one app");
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_FOCUS_MINUTES) throw new KaziError(`Pick between 1 minute and ${MAX_FOCUS_MINUTES / 60} hours`);
+  const next = clone(data);
+  const t = account(next, targetId);
+  const running = t.focus && t.focus.until > now ? t.focus : null;
+  t.focus = {
+    apps: [.../* @__PURE__ */ new Set([...running?.apps ?? [], ...apps])],
+    startedAt: running?.startedAt ?? now,
+    until: Math.max(running?.until ?? 0, now + minutes * MINUTE)
+  };
+  if (byParent) notify(next, targetId, `${account(next, actorId).name} started a ${minutes}-minute focus timer`, "/child", now);
+  return next;
+}
 function askForTime(data, childId, appId2, now) {
   const child = account(data, childId);
   if (!child.parentId) throw new KaziError("You aren\u2019t linked to a parent yet");
@@ -986,9 +1144,8 @@ function contactsOf(data, meId) {
         checksWith: false
       });
   }
-  const myKey = normalizeContact(me2.email);
   for (const a of Object.values(data.accounts)) {
-    if (a.verifier && normalizeContact(a.verifier.contact) === myKey) add(a, "You check their work", true);
+    if (a.verifier && isContactOf(me2, a.verifier.contact)) add(a, "You check their work", true);
   }
   for (const t of requestsFor(data, meId)) if (!t.verifierId) add(data.accounts[t.ownerId], "You check their work", true);
   if (me2.parentId) add(data.accounts[me2.parentId], "Your parent");
@@ -1138,9 +1295,23 @@ function updateProfile(data, actor, args) {
         const v = value;
         if (!v || typeof v !== "object") bad();
         const contact = str(v.contact, 120).trim();
-        if (!isValidContact(contact)) throw new KaziError("Enter a valid email or phone number");
-        if (normalizeContact(contact) === normalizeContact(a.email)) throw new KaziError("Pick someone else. You can\u2019t check your own work.");
+        if (!isValidPersonContact(contact)) throw new KaziError("Enter an email, phone number or @username");
+        if (isContactOf(a, contact)) throw new KaziError("Pick someone else. You can\u2019t check your own work.");
         out.verifier = { contact, relation: oneOf(v.relation, RELATIONS) };
+        break;
+      }
+      case "username": {
+        const u = cleanUsername(str(value, 40));
+        if (!u) throw new KaziError("Usernames are 3\u201320 letters, numbers, dots or underscores");
+        const other = findAccountByContact(data, `@${u}`);
+        if (other && other.id !== actor) throw new KaziError("That username is taken. Try another.");
+        out.username = u;
+        break;
+      }
+      case "lockMessages": {
+        if (!Array.isArray(value) || value.length > 20) bad();
+        const list = value.map((m) => str(m, 120).replace(/\s+/g, " ").trim()).filter(Boolean);
+        out.lockMessages = [...new Set(list)];
         break;
       }
       case "notificationsOn":
@@ -1197,6 +1368,33 @@ var ACTIONS = {
     return setChildRules(d, actor, id(a.childId), { lockedApps: appIds(rules.lockedApps), unlockTime: clock(rules.unlockTime) }, now);
   },
   unlinkChild: (d, actor, a) => unlinkChild(d, actor, id(a.childId)),
+  setBlocks: (d, actor, a, now) => {
+    if (!Array.isArray(a.blocks)) bad();
+    const blocks = a.blocks.map((x) => {
+      const o = x;
+      if (!o || typeof o !== "object" || !Array.isArray(o.apps) || !Array.isArray(o.days) || o.apps.length > MAX_LOCKED_APPS) bad();
+      const start = clock(o.start);
+      const end = clock(o.end);
+      if (start === null || end === null) bad();
+      return {
+        id: id(o.id),
+        name: str(o.name, 40),
+        apps: [...new Set(o.apps.map(appId))],
+        start,
+        end,
+        days: o.days.map((dd) => {
+          const n = int(dd);
+          if (n < 0 || n > 6) bad();
+          return n;
+        })
+      };
+    });
+    return setBlocks(d, actor, a.childId === void 0 ? actor : id(a.childId), blocks, now);
+  },
+  startFocus: (d, actor, a, now) => {
+    if (!Array.isArray(a.apps) || a.apps.length > MAX_LOCKED_APPS) bad();
+    return startFocus(d, actor, a.childId === void 0 ? actor : id(a.childId), [...new Set(a.apps.map(appId))], int(a.minutes), now);
+  },
   adjustChildBalance: (d, actor, a, now) => adjustChildBalance(d, actor, id(a.childId), oneOf(a.kind, REWARD_KINDS), int(a.amount), now),
   // The built-in demo of locked apps (web only; the Android app reports real usage instead).
   spendScroll: (d, actor, a, now) => {
@@ -1245,62 +1443,9 @@ function secureRandom() {
   return buf[0] / 4294967296;
 }
 
-// src/lib/questions.ts
-var TOPICS = [
-  {
-    match: /\b(read|reading|book|pages?|chapter|novel|article)\b/i,
-    questions: [
-      "What did you read? Name the book, chapter or article.",
-      "What was the main idea of what you read?",
-      "Write one thing you learned or want to remember."
-    ]
-  },
-  {
-    match: /\b(revise|revision|study|studying|notes|exam|kcse|homework|assignment|essay|maths?|statistics|science|lecture|coursework|practice)\b/i,
-    questions: [
-      "Which topic or questions did you work on?",
-      "What was the hardest part, and how did you get through it?",
-      "Explain one thing from this task in your own words."
-    ]
-  },
-  {
-    match: /\b(gym|run|running|walk|workout|exercise|training|football|swim|yoga|jog|push-?ups?)\b/i,
-    questions: [
-      "What exercises did you do?",
-      "How long did you train for, and where?",
-      "How did your body feel afterwards?"
-    ]
-  },
-  {
-    match: /\b(clean|tidy|wash|dishes|laundry|bed|sweep|mop|chores?|room|kitchen|cook|cooking)\b/i,
-    questions: [
-      "What exactly did you clean or sort out?",
-      "What was the messiest part before you started?",
-      "How long did it take you?"
-    ]
-  },
-  {
-    match: /\b(invoice|email|client|meeting|report|design|code|coding|work|project|presentation|call)\b/i,
-    questions: [
-      "What did you finish? Be specific.",
-      "Who is it for, and what is the next step?",
-      "What took the most time?"
-    ]
-  }
-];
-var GENERIC = [
-  "What exactly did you do for this task?",
-  "How long did it take, and where were you?",
-  "What was the hardest part?"
-];
-function questionsFor(title) {
-  const topic = TOPICS.find((t) => t.match.test(title));
-  return topic ? topic.questions : GENERIC;
-}
-
 // src/lib/view.ts
-function publicAccount(a, viewerEmail = "") {
-  const picksViewer = !!a.verifier && !!viewerEmail && normalizeContact(a.verifier.contact) === normalizeContact(viewerEmail);
+function publicAccount(a, viewer) {
+  const picksViewer = !!a.verifier && !!viewer && isContactOf(viewer, a.verifier.contact);
   return {
     ...a,
     passwordHash: "",
@@ -1338,7 +1483,7 @@ function viewFor(data, meId) {
   const accounts = { [meId]: privateAccount(me2) };
   for (const c of children) accounts[c.id] = privateAccount(c);
   const addPublic = (a) => {
-    if (a && !accounts[a.id]) accounts[a.id] = publicAccount(a, me2.email);
+    if (a && !accounts[a.id]) accounts[a.id] = publicAccount(a, me2);
   };
   for (const c of contactsOf(data, meId)) if (c.id) addPublic(data.accounts[c.id]);
   for (const t of Object.values(tasks)) {
@@ -1372,6 +1517,7 @@ function isEmpty(c) {
 function accountKeys(a) {
   return {
     email_key: normalizeContact(a.email),
+    username_key: a.username ? `@${a.username}` : null,
     verifier_key: a.verifier ? normalizeContact(a.verifier.contact) : null,
     parent_id: a.parentId
   };
@@ -1419,7 +1565,7 @@ function diff(before, after, versions) {
 }
 function affectedBy(c, actorId, accounts) {
   const ids = /* @__PURE__ */ new Set([actorId]);
-  const byKey = new Map(Object.values(accounts).map((a) => [normalizeContact(a.email), a.id]));
+  const byKey = new Map(Object.values(accounts).flatMap((a) => contactKeysOf(a).map((key2) => [key2, a.id])));
   for (const a of c.accounts) {
     ids.add(a.id);
     if (a.data.parentId) ids.add(a.data.parentId);
@@ -1623,6 +1769,7 @@ function createCore(options) {
         await repo2.commit(changes);
       } catch (e) {
         if (e instanceof ConflictError && attempt < MAX_ATTEMPTS) continue;
+        if (e instanceof TakenError) throw new KaziError("That username is taken. Try another.");
         if (e instanceof ConflictError) throw new HttpError(503, "Kazikwanza is busy. Please try again.");
         throw e;
       }
@@ -1652,14 +1799,20 @@ function createCore(options) {
     if (password.length > 200) throw new HttpError(400, "That password is too long");
     if (!isValidContact(email)) throw new HttpError(400, "Enter a valid email or phone number");
     if (await repo2.findAccount(normalizeContact(email))) throw new KaziError("An account with this email or phone already exists. Sign in instead.");
+    const rawUsername = typeof body.username === "string" ? body.username : "";
+    if (rawUsername.trim()) {
+      const u = cleanUsername(rawUsername);
+      if (!u) throw new KaziError("Usernames are 3\u201320 letters, numbers, dots or underscores");
+      if (await repo2.findAccount(`@${u}`)) throw new KaziError("That username is taken. Try another.");
+    }
     const timeZone = isValidTimeZone(body.timeZone) ? body.timeZone : defaultZone;
-    const created = createAccount(emptyData(), { name, email, passwordHash: await hashPassword(password, rounds), timeZone }, now());
+    const created = createAccount(emptyData(), { name, email, username: rawUsername, passwordHash: await hashPassword(password, rounds), timeZone }, now());
     created.data.accounts[created.id].notifyKey = randomToken(18);
     created.data.sessionId = null;
     try {
       await repo2.commit(diff(emptyData(), created.data, { accounts: {}, tasks: {} }));
     } catch (e) {
-      if (e instanceof TakenError) throw new KaziError("An account with this email or phone already exists. Sign in instead.");
+      if (e instanceof TakenError) throw new KaziError("That email, phone or username is already taken. Sign in instead, or pick another.");
       throw e;
     }
     const token = await startSession2(created.id);
@@ -1671,12 +1824,12 @@ function createCore(options) {
     const body = await readJson(request);
     const email = typeof body.email === "string" ? body.email : "";
     const password = typeof body.password === "string" ? body.password : "";
-    const account2 = await repo2.findAccount(normalizeContact(email));
-    const limitKey = `fail:${account2?.id ?? normalizeContact(email)}`;
+    const account2 = await repo2.findAccount(signInKey(email));
+    const limitKey = `fail:${account2?.id ?? signInKey(email)}`;
     const ok = await verifyPassword(password, account2?.passwordHash || await dummyHash);
     if (!account2 || !ok) {
       if (!failedLogins.allow(limitKey)) throw new HttpError(429, "Too many wrong passwords. Wait 15 minutes and try again.");
-      throw new HttpError(400, "That email/phone and password don\u2019t match.");
+      throw new HttpError(400, "That sign-in and password don\u2019t match.");
     }
     failedLogins.reset(limitKey);
     const token = await startSession2(account2.id);
@@ -1707,6 +1860,11 @@ function createCore(options) {
     if (!actionLimiter.allow(me2)) throw new HttpError(429, "Slow down a little and try again.");
     if (name === "sendMessage" && !messageLimiter.allow(me2)) throw new HttpError(429, "You\u2019re sending messages very fast. Wait a moment.");
     const args = body.args ?? {};
+    if (name === "completeWithQuestions") {
+      const taskId2 = typeof args.taskId === "string" ? args.taskId : "";
+      const { data } = await repo2.load(me2);
+      if (data.tasks[taskId2]?.ownerId === me2 && !await repo2.getPhoto(taskId2)) throw new HttpError(400, "Take a photo of what you did first");
+    }
     if (name === "submitPhoto" || name === "completeWithQuestions") {
       const viaClaude = await claudeAction(me2, name, args);
       if (viaClaude) return viaClaude;
@@ -1754,7 +1912,10 @@ function createCore(options) {
         verdict = await claude.checkPhoto(task0, bytes, type);
       } else {
         const questions = questionsFor(task0.title);
-        verdict = await claude.checkAnswers(task0, questions.map((question, i) => ({ question, answer: answers[i] })));
+        const bytes = await repo2.getPhoto(taskId);
+        const type = bytes && photoType(bytes);
+        const photo = bytes && type ? { bytes, type } : void 0;
+        verdict = await claude.checkAnswers(task0, questions.map((question, i) => ({ question, answer: answers[i] })), photo);
       }
     } catch (e) {
       if (e instanceof HttpError) throw e;
@@ -1779,7 +1940,6 @@ function createCore(options) {
     const task2 = data.tasks[taskId];
     if (!task2 || task2.ownerId !== me2) throw new HttpError(404, "Task not found");
     if (task2.status !== "todo" && task2.status !== "redo") throw new HttpError(400, "This task has already been sent");
-    if (task2.verify === "questions") throw new HttpError(400, "This task is verified with questions");
     const bytes = await readBody(request, PHOTO_LIMIT);
     if (!photoType(bytes)) throw new HttpError(400, "Choose a photo (JPEG, PNG or WebP)");
     await repo2.putPhoto(taskId, bytes);
@@ -1789,7 +1949,8 @@ function createCore(options) {
     const me2 = await authenticate(request);
     const { data } = await repo2.load(me2);
     const task2 = data.tasks[taskId];
-    if (!task2 || !(task2.ownerId === me2 || canApprove(data, task2, me2))) throw new HttpError(404, "Photo not found");
+    const parentOfOwner = data.accounts[task2?.ownerId ?? ""]?.parentId === me2;
+    if (!task2 || !(task2.ownerId === me2 || parentOfOwner || canApprove(data, task2, me2))) throw new HttpError(404, "Photo not found");
     const bytes = await repo2.getPhoto(taskId);
     const type = bytes && photoType(bytes);
     if (!bytes || !type) throw new HttpError(404, "Photo not found");

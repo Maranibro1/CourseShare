@@ -202,9 +202,10 @@ public class KaziAccessibilityService extends AccessibilityService {
         lastScrollAt = 0;
         refreshKeyboards();
 
+        long now = System.currentTimeMillis();
+        if (lockIfBlocked(pkg, now)) return;
         LockStore.LockedApp app = lockedApp(pkg);
         if (app == null) return;
-        long now = System.currentTimeMillis();
         if (store.freeNow(now)) return;
 
         if (LockStore.KIND_MIXED.equals(app.kind)) {
@@ -228,6 +229,8 @@ public class KaziAccessibilityService extends AccessibilityService {
     }
 
     private void onScroll(String pkg) {
+        // A blocked time may have started while the app was open.
+        if (lockIfBlocked(pkg, System.currentTimeMillis())) return;
         LockStore.LockedApp app = lockedApp(pkg);
         if (app == null) return;
         boolean mixed = LockStore.KIND_MIXED.equals(app.kind);
@@ -248,6 +251,17 @@ public class KaziAccessibilityService extends AccessibilityService {
             return;
         }
         store.spend(app, LockStore.KIND_SCROLLS, session, 1, now);
+    }
+
+    /** Shuts an app that's in a blocked time or focus timer. Returns true if it did. */
+    private boolean lockIfBlocked(String pkg, long now) {
+        if (pkg == null || safePackages.contains(pkg)) return false;
+        String id = store.blockedAppId(pkg, now);
+        if (id == null) return false;
+        stopTiming();
+        stopWatching();
+        lockId(id, KIND_BLOCKED, false);
+        return true;
     }
 
     /** The rule for a package, or null when it isn't locked (or must never be). */
@@ -357,6 +371,7 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     private void onTick() {
         long now = System.currentTimeMillis();
+        if (lockIfBlocked(foreground, now)) return;
         if (store.freeNow(now)) {
             // The unlock time arrived while playing: charge up to now, then stop.
             stopTiming();
@@ -391,10 +406,17 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     /** {@code kind} says what ran out, for YouTube's lock screen: Shorts (scrolls) or videos (minutes). */
     private void lock(LockStore.LockedApp app, String kind) {
+        lockId(app.id, kind, LockStore.KIND_MIXED.equals(app.kind));
+    }
+
+    /** Marks a lock caused by a blocked time or focus timer. */
+    static final String KIND_BLOCKED = "blocked";
+
+    private void lockId(String appId, String kind, boolean mixed) {
         long now = System.currentTimeMillis();
         if (now - lastLockAt < LOCK_COOLDOWN_MS) return;
         lastLockAt = now;
-        Log.i(TAG, "Locking " + app.id + (kind == null ? "" : " (" + kind + ")"));
+        Log.i(TAG, "Locking " + appId + (kind == null ? "" : " (" + kind + ")"));
         stopTiming();
         stopWatching();
         // Leave the locked app first. Going home finishes on its own schedule, so the lock
@@ -403,8 +425,8 @@ public class KaziAccessibilityService extends AccessibilityService {
         handler.postDelayed(() -> {
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            intent.putExtra(MainActivity.EXTRA_LOCKED_APP, app.id);
-            if (kind != null && LockStore.KIND_MIXED.equals(app.kind)) intent.putExtra(MainActivity.EXTRA_LOCKED_KIND, kind);
+            intent.putExtra(MainActivity.EXTRA_LOCKED_APP, appId);
+            if (kind != null && (mixed || KIND_BLOCKED.equals(kind))) intent.putExtra(MainActivity.EXTRA_LOCKED_KIND, kind);
             startActivity(intent);
         }, HOME_SETTLE_MS);
     }

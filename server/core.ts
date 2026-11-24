@@ -12,7 +12,7 @@
  * The session token arrives in the X-Kazi-Token header (or Authorization: Bearer).
  */
 import { applyAction, isActionName } from '../src/lib/actions';
-import { KaziError, applyClaudeVerdict, canApprove, childrenOf, claudeCanCheck, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
+import { KaziError, cleanUsername, signInKey, applyClaudeVerdict, canApprove, childrenOf, claudeCanCheck, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
 import { questionsFor } from '../src/lib/questions';
 import { isValidTimeZone, withTimeZone } from '../src/lib/time';
 import type { ClaudeChecker, Verdict } from './claude';
@@ -262,6 +262,8 @@ export function createCore(options: CoreOptions) {
         await repo.commit(changes);
       } catch (e) {
         if (e instanceof ConflictError && attempt < MAX_ATTEMPTS) continue;
+        // Only a username can clash after sign-up (emails can't change).
+        if (e instanceof TakenError) throw new KaziError('That username is taken. Try another.');
         if (e instanceof ConflictError) throw new HttpError(503, 'Kazikwanza is busy. Please try again.');
         throw e;
       }
@@ -294,14 +296,20 @@ export function createCore(options: CoreOptions) {
     if (password.length > 200) throw new HttpError(400, 'That password is too long');
     if (!isValidContact(email)) throw new HttpError(400, 'Enter a valid email or phone number');
     if (await repo.findAccount(normalizeContact(email))) throw new KaziError('An account with this email or phone already exists. Sign in instead.');
+    const rawUsername = typeof body.username === 'string' ? body.username : '';
+    if (rawUsername.trim()) {
+      const u = cleanUsername(rawUsername);
+      if (!u) throw new KaziError('Usernames are 3–20 letters, numbers, dots or underscores');
+      if (await repo.findAccount(`@${u}`)) throw new KaziError('That username is taken. Try another.');
+    }
     const timeZone = isValidTimeZone(body.timeZone) ? body.timeZone : defaultZone;
-    const created = createAccount(emptyData(), { name, email, passwordHash: await hashPassword(password, rounds), timeZone }, now());
+    const created = createAccount(emptyData(), { name, email, username: rawUsername, passwordHash: await hashPassword(password, rounds), timeZone }, now());
     created.data.accounts[created.id].notifyKey = randomToken(18);
     created.data.sessionId = null;
     try {
       await repo.commit(diff(emptyData(), created.data, { accounts: {}, tasks: {} }));
     } catch (e) {
-      if (e instanceof TakenError) throw new KaziError('An account with this email or phone already exists. Sign in instead.');
+      if (e instanceof TakenError) throw new KaziError('That email, phone or username is already taken. Sign in instead, or pick another.');
       throw e;
     }
     const token = await startSession(created.id);
@@ -314,13 +322,13 @@ export function createCore(options: CoreOptions) {
     const body = await readJson(request);
     const email = typeof body.email === 'string' ? body.email : '';
     const password = typeof body.password === 'string' ? body.password : '';
-    const account = await repo.findAccount(normalizeContact(email));
-    const limitKey = `fail:${account?.id ?? normalizeContact(email)}`;
+    const account = await repo.findAccount(signInKey(email));
+    const limitKey = `fail:${account?.id ?? signInKey(email)}`;
     // Always do the slow comparison, so a wrong email takes as long as a wrong password.
     const ok = await verifyPassword(password, account?.passwordHash || (await dummyHash));
     if (!account || !ok) {
       if (!failedLogins.allow(limitKey)) throw new HttpError(429, 'Too many wrong passwords. Wait 15 minutes and try again.');
-      throw new HttpError(400, 'That email/phone and password don’t match.');
+      throw new HttpError(400, 'That sign-in and password don’t match.');
     }
     failedLogins.reset(limitKey);
     const token = await startSession(account.id);
@@ -354,6 +362,12 @@ export function createCore(options: CoreOptions) {
     if (!actionLimiter.allow(me)) throw new HttpError(429, 'Slow down a little and try again.');
     if (name === 'sendMessage' && !messageLimiter.allow(me)) throw new HttpError(429, 'You’re sending messages very fast. Wait a moment.');
     const args = (body.args ?? {}) as Record<string, unknown>;
+    if (name === 'completeWithQuestions') {
+      // Questions need a photo of the finished task too; it's kept with the answers as proof.
+      const taskId = typeof args.taskId === 'string' ? args.taskId : '';
+      const { data } = await repo.load(me);
+      if (data.tasks[taskId]?.ownerId === me && !(await repo.getPhoto(taskId))) throw new HttpError(400, 'Take a photo of what you did first');
+    }
     if (name === 'submitPhoto' || name === 'completeWithQuestions') {
       const viaClaude = await claudeAction(me, name, args);
       if (viaClaude) return viaClaude;
@@ -409,7 +423,10 @@ export function createCore(options: CoreOptions) {
         verdict = await claude.checkPhoto(task0, bytes, type as 'image/jpeg' | 'image/png' | 'image/webp');
       } else {
         const questions = questionsFor(task0.title);
-        verdict = await claude.checkAnswers(task0, questions.map((question, i) => ({ question, answer: answers![i] })));
+        const bytes = await repo.getPhoto(taskId);
+        const type = bytes && photoType(bytes);
+        const photo = bytes && type ? { bytes, type: type as 'image/jpeg' | 'image/png' | 'image/webp' } : undefined;
+        verdict = await claude.checkAnswers(task0, questions.map((question, i) => ({ question, answer: answers![i] })), photo);
       }
     } catch (e) {
       if (e instanceof HttpError) throw e;
@@ -436,7 +453,6 @@ export function createCore(options: CoreOptions) {
     const task = data.tasks[taskId];
     if (!task || task.ownerId !== me) throw new HttpError(404, 'Task not found');
     if (task.status !== 'todo' && task.status !== 'redo') throw new HttpError(400, 'This task has already been sent');
-    if (task.verify === 'questions') throw new HttpError(400, 'This task is verified with questions');
     const bytes = await readBody(request, PHOTO_LIMIT);
     if (!photoType(bytes)) throw new HttpError(400, 'Choose a photo (JPEG, PNG or WebP)');
     await repo.putPhoto(taskId, bytes);
@@ -447,7 +463,8 @@ export function createCore(options: CoreOptions) {
     const me = await authenticate(request);
     const { data } = await repo.load(me);
     const task = data.tasks[taskId];
-    if (!task || !(task.ownerId === me || canApprove(data, task, me))) throw new HttpError(404, 'Photo not found');
+    const parentOfOwner = data.accounts[task?.ownerId ?? '']?.parentId === me;
+    if (!task || !(task.ownerId === me || parentOfOwner || canApprove(data, task, me))) throw new HttpError(404, 'Photo not found');
     const bytes = await repo.getPhoto(taskId);
     const type = bytes && photoType(bytes);
     if (!bytes || !type) throw new HttpError(404, 'Photo not found');

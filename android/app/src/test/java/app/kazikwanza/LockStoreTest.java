@@ -241,6 +241,40 @@ public class LockStoreTest {
         assertEquals(3, store.scrollsLeft());
     }
 
+    private static long at(int dayOfWeek, int hour, int minute) {
+        Calendar c = Calendar.getInstance();
+        c.set(Calendar.DAY_OF_WEEK, dayOfWeek);
+        c.set(Calendar.HOUR_OF_DAY, hour);
+        c.set(Calendar.MINUTE, minute);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
+    }
+
+    @Test
+    public void blockedWindowsRunOverMidnightOnTheRightDays() throws Exception {
+        // School nights: Sunday to Thursday, 21:00 to 07:00.
+        JSONObject b = new JSONObject("{\"start\":\"21:00\",\"end\":\"07:00\",\"days\":[0,1,2,3,4]}");
+        assertTrue("Monday 22:00", LockStore.windowOn(b, at(Calendar.MONDAY, 22, 0)));
+        assertTrue("Tuesday 06:59, from Monday night", LockStore.windowOn(b, at(Calendar.TUESDAY, 6, 59)));
+        assertFalse("Tuesday 07:00", LockStore.windowOn(b, at(Calendar.TUESDAY, 7, 0)));
+        assertFalse("Friday 22:00 isn't a school night", LockStore.windowOn(b, at(Calendar.FRIDAY, 22, 0)));
+        assertTrue("Friday 06:00, from Thursday night", LockStore.windowOn(b, at(Calendar.FRIDAY, 6, 0)));
+        assertFalse("Saturday 06:00", LockStore.windowOn(b, at(Calendar.SATURDAY, 6, 0)));
+    }
+
+    @Test
+    public void focusTimerAndBlocksNameTheBlockedApp() throws Exception {
+        long now = System.currentTimeMillis();
+        rules.put("focus", new JSONObject("{\"until\":" + (now + 60_000) + ",\"apps\":[{\"id\":\"tiktok\",\"packages\":[\"com.zhiliaoapp.musically\"]}]}"));
+        store.sync(rules);
+        assertEquals("tiktok", store.blockedAppId("com.zhiliaoapp.musically", now));
+        assertNull(store.blockedAppId("com.mojang.minecraftpe", now));
+        assertNull("over once it ends", store.blockedAppId("com.zhiliaoapp.musically", now + 61_000));
+        LockStore reloaded = new LockStore(context);
+        assertEquals("survives a restart", "tiktok", reloaded.blockedAppId("com.zhiliaoapp.musically", now));
+    }
+
     @Test
     public void freeFromTheUnlockTimeUntilMidnight() throws Exception {
         rules.put("unlockTime", "13:00");

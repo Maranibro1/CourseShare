@@ -15,7 +15,11 @@ export interface Verdict {
 
 export interface ClaudeChecker {
   checkPhoto(task: { title: string }, photo: Uint8Array, mediaType: 'image/jpeg' | 'image/png' | 'image/webp'): Promise<Verdict>;
-  checkAnswers(task: { title: string }, qa: { question: string; answer: string }[]): Promise<Verdict>;
+  checkAnswers(
+    task: { title: string },
+    qa: { question: string; answer: string }[],
+    photo?: { bytes: Uint8Array; type: 'image/jpeg' | 'image/png' | 'image/webp' },
+  ): Promise<Verdict>;
 }
 
 const MODEL = 'claude-opus-5-5';
@@ -96,13 +100,14 @@ export function claudeChecker(apiKey: string | undefined): ClaudeChecker | null 
           text: `Task: ${JSON.stringify(task.title)}\nDoes this photo show the task done?`,
         },
       ]),
-    checkAnswers: (task, qa) =>
+    checkAnswers: (task, qa, photo) =>
       ask([
+        ...(photo ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: photo.type, data: toBase64(photo.bytes) } }] : []),
         {
           type: 'text',
-          text: `Task: ${JSON.stringify(task.title)}\nThe person answered these questions to show they did it:\n${qa
+          text: `Task: ${JSON.stringify(task.title)}\n${photo ? 'The photo above shows what they did. ' : ''}The person answered these questions to show they did it:\n${qa
             .map((x, i) => `${i + 1}. ${x.question}\nAnswer: ${JSON.stringify(x.answer)}`)
-            .join('\n')}\nDo the answers show they genuinely did the task?`,
+            .join('\n')}\nDo the photo and answers show they genuinely did the task?`,
         },
       ]),
   };

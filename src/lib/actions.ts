@@ -20,12 +20,16 @@ import {
   deleteTask,
   editTask,
   emergencyUnlock,
-  isValidContact,
   joinFamily,
   markNotificationsRead,
   markRewardSeen,
   markThreadRead,
-  normalizeContact,
+  cleanUsername,
+  findAccountByContact,
+  isContactOf,
+  isValidPersonContact,
+  setBlocks,
+  startFocus,
   remindApprover,
   requestRedo,
   sendMessage,
@@ -194,9 +198,23 @@ function updateProfile(data: AppData, actor: string, args: Record<string, unknow
         const v = value as Record<string, unknown>;
         if (!v || typeof v !== 'object') bad();
         const contact = str(v.contact, 120).trim();
-        if (!isValidContact(contact)) throw new KaziError('Enter a valid email or phone number');
-        if (normalizeContact(contact) === normalizeContact(a.email)) throw new KaziError('Pick someone else. You can’t check your own work.');
+        if (!isValidPersonContact(contact)) throw new KaziError('Enter an email, phone number or @username');
+        if (isContactOf(a, contact)) throw new KaziError('Pick someone else. You can’t check your own work.');
         out.verifier = { contact, relation: oneOf(v.relation, RELATIONS) };
+        break;
+      }
+      case 'username': {
+        const u = cleanUsername(str(value, 40));
+        if (!u) throw new KaziError('Usernames are 3–20 letters, numbers, dots or underscores');
+        const other = findAccountByContact(data, `@${u}`);
+        if (other && other.id !== actor) throw new KaziError('That username is taken. Try another.');
+        out.username = u;
+        break;
+      }
+      case 'lockMessages': {
+        if (!Array.isArray(value) || value.length > 20) bad();
+        const list = (value as unknown[]).map((m) => str(m, 120).replace(/\s+/g, ' ').trim()).filter(Boolean);
+        out.lockMessages = [...new Set(list)];
         break;
       }
       case 'notificationsOn':
@@ -259,6 +277,33 @@ export const ACTIONS = {
     return setChildRules(d, actor, id(a.childId), { lockedApps: appIds(rules.lockedApps), unlockTime: clock(rules.unlockTime) }, now);
   },
   unlinkChild: (d, actor, a) => unlinkChild(d, actor, id(a.childId)),
+  setBlocks: (d, actor, a, now) => {
+    if (!Array.isArray(a.blocks)) bad();
+    const blocks = (a.blocks as unknown[]).map((x) => {
+      const o = x as Record<string, unknown>;
+      if (!o || typeof o !== 'object' || !Array.isArray(o.apps) || !Array.isArray(o.days) || o.apps.length > MAX_LOCKED_APPS) bad();
+      const start = clock(o.start);
+      const end = clock(o.end);
+      if (start === null || end === null) bad();
+      return {
+        id: id(o.id),
+        name: str(o.name, 40),
+        apps: [...new Set((o.apps as unknown[]).map(appId))],
+        start: start as string,
+        end: end as string,
+        days: (o.days as unknown[]).map((dd) => {
+          const n = int(dd);
+          if (n < 0 || n > 6) bad();
+          return n;
+        }),
+      };
+    });
+    return setBlocks(d, actor, a.childId === undefined ? actor : id(a.childId), blocks, now);
+  },
+  startFocus: (d, actor, a, now) => {
+    if (!Array.isArray(a.apps) || a.apps.length > MAX_LOCKED_APPS) bad();
+    return startFocus(d, actor, a.childId === undefined ? actor : id(a.childId), [...new Set((a.apps as unknown[]).map(appId))], int(a.minutes), now);
+  },
   adjustChildBalance: (d, actor, a, now) => adjustChildBalance(d, actor, id(a.childId), oneOf(a.kind, REWARD_KINDS), int(a.amount), now),
 
   // The built-in demo of locked apps (web only; the Android app reports real usage instead).

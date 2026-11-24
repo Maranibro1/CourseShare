@@ -26,6 +26,10 @@ The app comes in three pieces, all in this repository:
   - *Claude:* send the photo to Claude instead of a person. It approves straight away or sends it back saying what to fix. Claude runs on the server only, so its key never reaches a phone and nobody can fake its answer; each person gets up to 40 checks a day.
   - If your verifier hasn't replied after 3 hours, you can answer questions instead.
   - *Check others' work:* photos people sent you, with Approve and Ask to redo.
+- **Usernames.** Everyone picks an @username at sign-up. Pick your verifier by @username from the Verify tab (or verify your own tasks with a photo and questions), and sign in with your username, email or phone.
+- **Proof is kept.** Questions start with a photo of what you did; the photo and your answers are saved with the task, under *Your proof*.
+- **Lock screen messages.** Pick encouraging lines, or write your own; one shows each time an app is locked.
+- **Blocked times and focus timers.** Block chosen apps completely during a daily window (like 9 PM to 7 AM on school nights), or for a countdown starting now (15 minutes to 12 hours). Blocked apps can't open even with scrolls or after the unlock time. A blocked time can't be removed or loosened while it's on, and a focus timer can't be stopped early. Parents set these for their children. The phone lock enforces them even when Kazikwanza is closed.
 - **People I verify for.** The icon at the top of the home screen lists the people who picked you, with a badge for photos waiting.
 - **Any app can be limited.** On Android, the app lists every app installed on the phone, so you can give any of them a screen-time limit. A parent sees their child's apps on their own phone. The phone app, Settings and the home screen are never locked, so nobody is cut off from calling for help.
 - **Messages.**
@@ -64,7 +68,7 @@ The app comes in three pieces, all in this repository:
 The backend runs on a free Supabase project: Postgres for accounts and tasks, Storage for proof photos, an Edge Function for the API, and Realtime for live updates.
 
 1. **Create a project** at [supabase.com](https://supabase.com).
-2. **Tables.** Open **SQL Editor**, paste all of [`supabase/schema.sql`](supabase/schema.sql) and click **Run**. It creates the tables, the two database functions the API uses and the private `kazi-proofs` photo bucket. It's safe to run again after updates.
+2. **Tables.** Open **SQL Editor**, paste all of [`supabase/schema.sql`](supabase/schema.sql) and click **Run**. Run it again after updates (it adds new columns, such as usernames, to an existing database). It creates the tables, the two database functions the API uses and the private `kazi-proofs` photo bucket. It's safe to run again after updates.
 3. **API.** Open **Edge Functions → Deploy a new function → Via editor**, name it `kazi`, paste all of [`supabase/functions/kazi/index.ts`](supabase/functions/kazi/index.ts) and deploy. Then in the function's **Details**, turn **off** JWT verification ("Verify JWT" or "Enforce JWT verification"; Kazikwanza checks its own sign-in tokens). With the Supabase CLI instead: `supabase functions deploy kazi --no-verify-jwt`.
 4. **Claude (optional).** In **Edge Functions → Secrets**, add `ANTHROPIC_API_KEY` with a key from [platform.claude.com](https://platform.claude.com). The "Send a photo to Claude" option then appears in the app, and Claude reads question answers. Without it, everything else works as before.
 5. **Live updates.** In **Realtime → Settings**, keep "Allow public access" on. Each account listens on a channel named with a random secret only that account knows, and the channel only ever says "something changed"; the data itself always comes through the API.

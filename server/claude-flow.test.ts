@@ -88,10 +88,13 @@ describe('Claude checks proof on the server', () => {
   });
 
   it('grades question answers: good ones complete the task, weak ones come back with a note', async () => {
-    const { act, person } = setup(fakeClaude);
+    const { act, call, person } = setup(fakeClaude);
     const token = await person();
     const taskId = (await act(token, 'addTask', { input: { title: 'Read 20 pages', rewardKind: 'scrolls', amount: 20, verify: 'questions', repeat: 'never' } }))
       .data.result;
+    // Questions need a photo first.
+    expect((await act(token, 'completeWithQuestions', { taskId, answers: ['abc', 'abc', 'abc'] })).data.error).toMatch(/photo/);
+    await call(`/photos/${taskId}`, { token, method: 'PUT', body: JPEG });
     verdict = { approve: false, reason: 'Say which book you read.' };
     const weak = await act(token, 'completeWithQuestions', { taskId, answers: ['abc', 'abc', 'abc'] });
     expect(weak.data.result).toEqual({ claude: verdict });
@@ -115,9 +118,10 @@ describe('Claude checks proof on the server', () => {
   });
 
   it('stops after the daily limit', async () => {
-    const { act, person } = setup(fakeClaude);
+    const { act, call, person } = setup(fakeClaude);
     const token = await person();
     const taskId = (await act(token, 'addTask', { input: { title: 'Read', rewardKind: 'scrolls', amount: 5, verify: 'questions', repeat: 'never' } })).data.result;
+    await call(`/photos/${taskId}`, { token, method: 'PUT', body: JPEG });
     verdict = { approve: false, reason: 'More detail please.' };
     let last = { status: 200, data: {} as Record<string, unknown> };
     for (let i = 0; i < 41 && last.status === 200; i += 1) {

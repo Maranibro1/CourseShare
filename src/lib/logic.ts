@@ -2,6 +2,8 @@
  * All state changes live here as pure functions over AppData, so they can be
  * unit tested without a browser. Each mutation takes `now` explicitly.
  */
+import { questionsFor } from './questions';
+import { MAX_BLOCKS, MAX_FOCUS_MINUTES, activeBlock, activeSchedules } from './blocks';
 import { DEFAULT_LOCKED, appFor, appsFor, isValidAppId, lockedAppsOf, usesMinutes, usesScrolls, type LockableApp } from './apps';
 import { DAY, HOUR, MINUTE, clockToday, dayKey, formatClock, isValidTimeZone, isWeekday, startOfDay, startOfWeek } from './time';
 import type {
@@ -14,6 +16,7 @@ import type {
   RewardKind,
   Task,
   VerifyMethod,
+  BlockSchedule,
 } from './types';
 
 export const EMERGENCY_PER_WEEK = 3;
@@ -54,9 +57,39 @@ const clone = (data: AppData): AppData => structuredClone(data);
 
 export function normalizeContact(s: string): string {
   const t = s.trim().toLowerCase();
+  // Usernames: "@Sam_K" and "@sam_k" are the same person.
+  if (t.startsWith('@')) return `@${t.slice(1)}`;
   // Phone numbers: keep digits and a leading +, so "0712 345 678" matches "0712345678".
   if (/^[+\d][\d\s-]*$/.test(t)) return t.replace(/[\s-]/g, '');
   return t;
+}
+
+export const USERNAME_RE = /^[a-z0-9_.]{3,20}$/;
+
+/** "Sam_K", "@sam_k" → "sam_k", or null when it isn't a valid username. */
+export function cleanUsername(s: string): string | null {
+  const t = s.trim().replace(/^@/, '').toLowerCase();
+  return USERNAME_RE.test(t) ? t : null;
+}
+
+/** An @username, as typed in a verifier or sign-in box. */
+export function isUsernameContact(s: string): boolean {
+  return s.trim().startsWith('@') && cleanUsername(s) !== null;
+}
+
+/** Every key a person can be found by: their email or phone, and their @username. */
+export function contactKeysOf(a: Pick<Account, 'email' | 'username'>): string[] {
+  return a.username ? [normalizeContact(a.email), `@${a.username}`] : [normalizeContact(a.email)];
+}
+
+/** True when `contact` (email, phone or @username) points at this person. */
+export function isContactOf(a: Pick<Account, 'email' | 'username'>, contact: string | null | undefined): boolean {
+  return !!contact && contactKeysOf(a).includes(normalizeContact(contact));
+}
+
+/** An email, phone number or @username someone can be reached by. */
+export function isValidPersonContact(s: string): boolean {
+  return isValidContact(s) || isUsernameContact(s);
 }
 
 export function isValidContact(s: string): boolean {
@@ -78,10 +111,16 @@ function task(data: AppData, id: string): Task {
   return t;
 }
 
+/** What someone typed to sign in, as a lookup key: an email or phone, or "@username" (with or without the @). */
+export function signInKey(typed: string): string {
+  if (isValidContact(typed)) return normalizeContact(typed);
+  const u = cleanUsername(typed);
+  return u ? `@${u}` : normalizeContact(typed);
+}
+
 export function findAccountByContact(data: AppData, contact: string | null): Account | undefined {
   if (!contact) return undefined;
-  const key = normalizeContact(contact);
-  return Object.values(data.accounts).find((a) => normalizeContact(a.email) === key);
+  return Object.values(data.accounts).find((a) => isContactOf(a, contact));
 }
 
 function pushLedger(a: Account, entry: Omit<LedgerEntry, 'id'>, id = newId('l')) {
@@ -110,6 +149,8 @@ export function rewardWords(kind: RewardKind, amount: number): string {
 export interface NewAccount {
   name: string;
   email: string;
+  /** Optional @name others can find you by (without the @). */
+  username?: string;
   passwordHash: string;
   timeZone?: string;
 }
@@ -120,10 +161,18 @@ export function createAccount(data: AppData, input: NewAccount, now: number): { 
   if (name.length > 40) throw new KaziError('Keep your name under 40 characters');
   if (!isValidContact(input.email)) throw new KaziError('Enter a valid email or phone number');
   if (findAccountByContact(data, input.email)) throw new KaziError('An account with this email or phone already exists. Sign in instead.');
+  let username: string | undefined;
+  if (input.username !== undefined && input.username.trim() !== '') {
+    const u = cleanUsername(input.username);
+    if (!u) throw new KaziError('Usernames are 3–20 letters, numbers, dots or underscores');
+    if (findAccountByContact(data, `@${u}`)) throw new KaziError('That username is taken. Try another.');
+    username = u;
+  }
   const next = clone(data);
   const id = newId('u');
   next.accounts[id] = {
     id,
+    ...(username ? { username } : {}),
     name,
     email: input.email.trim(),
     passwordHash: input.passwordHash,
@@ -153,7 +202,7 @@ export function createAccount(data: AppData, input: NewAccount, now: number): { 
 
 export function signIn(data: AppData, contact: string, passwordHash: string): AppData {
   const a = findAccountByContact(data, contact);
-  if (!a || a.passwordHash !== passwordHash) throw new KaziError('That email/phone and password don’t match.');
+  if (!a || a.passwordHash !== passwordHash) throw new KaziError('That sign-in and password don’t match.');
   return { ...data, sessionId: a.id };
 }
 
@@ -180,10 +229,12 @@ export function freeUnlockActive(a: Account, now: number): boolean {
   return a.unlockTime !== null && now >= clockToday(a.unlockTime, now);
 }
 
-export type Access = 'not-locked' | 'free' | 'balance' | 'locked';
+/** blocked: inside a blocked time or focus timer, so it can't be opened at all. */
+export type Access = 'not-locked' | 'free' | 'balance' | 'locked' | 'blocked';
 
 export function accessFor(a: Account, appId: string, now: number): Access {
   const app = appFor(a, appId);
+  if (app && activeBlock(a, appId, now)) return 'blocked';
   if (!app || !a.lockedApps.includes(appId)) return 'not-locked';
   if (freeUnlockActive(a, now)) return 'free';
   const scrolls = a.scrolls > 0;
@@ -223,6 +274,7 @@ export function startSession(data: AppData, accountId: string, appId: string, no
   let next = data.accounts[accountId].session ? closeSession(data, accountId, now) : data;
   const a0 = account(next, accountId);
   const access = accessFor(a0, appId, now);
+  if (access === 'blocked') throw new KaziError(`${app.name} is blocked right now`);
   if (access === 'locked' || (access === 'balance' && remainingSeconds(a0, now) <= 0)) throw new KaziError(`${app.name} is locked`);
   next = clone(next);
   account(next, accountId).session = { appId, startedAt: now, free: access !== 'balance' };
@@ -264,7 +316,7 @@ export function spendScroll(
   const access = accessFor(a0, appId, now);
   if (access === 'free' || access === 'not-locked') return { data, result: 'free' };
   // YouTube can be open on screen time alone, but Shorts still need scrolls.
-  if (access === 'locked' || a0.scrolls <= 0) return { data, result: 'locked' };
+  if (access === 'locked' || access === 'blocked' || a0.scrolls <= 0) return { data, result: 'locked' };
   const next = clone(data);
   const a = account(next, accountId);
   a.scrolls -= 1;
@@ -481,7 +533,7 @@ export function canApprove(data: AppData, t: Task, accountId: string): boolean {
   if (t.verify !== 'photo' || t.ownerId === accountId) return false;
   if (t.verifierId) return t.verifierId === accountId;
   const me = data.accounts[accountId];
-  return !!me && !!t.verifierContact && normalizeContact(me.email) === normalizeContact(t.verifierContact);
+  return !!me && !!t.verifierContact && isContactOf(me, t.verifierContact);
 }
 
 export function submitPhoto(data: AppData, taskId: string, ownerId: string, now: number): AppData {
@@ -540,6 +592,9 @@ export function completeWithQuestions(data: AppData, taskId: string, ownerId: st
   const next = clone(data);
   const t = task(next, taskId);
   if (fallback) t.verify = 'questions';
+  // Keep what they said they did, with the photo they took, so it can be looked back at.
+  const qs = questionsFor(t.title);
+  t.lastProof = { at: now, answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2000) })), photo: true };
   award(next, t, null, now);
   return next;
 }
@@ -919,6 +974,62 @@ export function adjustChildBalance(data: AppData, parentId: string, childId: str
   return next;
 }
 
+/* ───────── Blocked times and focus timers ───────── */
+
+/** Whose blocks `actorId` may change: their own, or their linked child's. Throws otherwise. */
+function blockTarget(data: AppData, actorId: string, targetId: string): { target: Account; byParent: boolean } {
+  const target = account(data, targetId);
+  if (targetId === actorId) return { target, byParent: false };
+  if (target.parentId === actorId) return { target, byParent: true };
+  throw new KaziError('You can only change your own blocks, or your child’s');
+}
+
+/**
+ * Replaces the daily blocked windows. Blocks you set for yourself can't be
+ * removed or loosened while they're on (that would be the easy way out); a
+ * parent can change their child's at any time, and a linked child can't
+ * change the ones their parent set.
+ */
+export function setBlocks(data: AppData, actorId: string, targetId: string, blocks: BlockSchedule[], now: number): AppData {
+  const { target, byParent } = blockTarget(data, actorId, targetId);
+  if (!byParent && target.parentId && target.mode === 'child') throw new KaziError('Your parent sets your blocked times');
+  if (blocks.length > MAX_BLOCKS) throw new KaziError(`You can have up to ${MAX_BLOCKS} blocked times`);
+  for (const b of blocks) {
+    if (!b.name.trim()) throw new KaziError('Give each blocked time a name');
+    if (b.apps.length === 0) throw new KaziError(`Pick at least one app to block for “${b.name}”`);
+    if (b.days.length === 0) throw new KaziError(`Pick at least one day for “${b.name}”`);
+    if (b.start === b.end) throw new KaziError('The start and end time must be different');
+  }
+  if (!byParent) {
+    for (const old of activeSchedules(target, now)) {
+      const kept = blocks.find((b) => b.id === old.id);
+      const same = kept && kept.start === old.start && kept.end === old.end && old.days.every((d) => kept.days.includes(d)) && old.apps.every((x) => kept.apps.includes(x));
+      if (!same) throw new KaziError(`“${old.name}” is on right now. You can change it once it ends.`);
+    }
+  }
+  const next = clone(data);
+  account(next, targetId).blocks = blocks.map((b) => ({ ...b, name: b.name.trim(), apps: [...new Set(b.apps)], days: [...new Set(b.days)].sort() }));
+  if (byParent) notify(next, targetId, `${account(next, actorId).name} updated your blocked times`, '/child', now);
+  return next;
+}
+
+/** Starts (or extends) a focus timer that keeps the chosen apps shut. It can't be stopped early. */
+export function startFocus(data: AppData, actorId: string, targetId: string, apps: string[], minutes: number, now: number): AppData {
+  const { byParent } = blockTarget(data, actorId, targetId);
+  if (apps.length === 0) throw new KaziError('Pick at least one app');
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_FOCUS_MINUTES) throw new KaziError(`Pick between 1 minute and ${MAX_FOCUS_MINUTES / 60} hours`);
+  const next = clone(data);
+  const t = account(next, targetId);
+  const running = t.focus && t.focus.until > now ? t.focus : null;
+  t.focus = {
+    apps: [...new Set([...(running?.apps ?? []), ...apps])],
+    startedAt: running?.startedAt ?? now,
+    until: Math.max(running?.until ?? 0, now + minutes * MINUTE),
+  };
+  if (byParent) notify(next, targetId, `${account(next, actorId).name} started a ${minutes}-minute focus timer`, '/child', now);
+  return next;
+}
+
 export function askForTime(data: AppData, childId: string, appId: string, now: number): AppData {
   const child = account(data, childId);
   if (!child.parentId) throw new KaziError('You aren’t linked to a parent yet');
@@ -989,17 +1100,30 @@ export interface NativeUsageEvent {
 export interface NativeRules {
   enabled: boolean;
   apps: { id: string; name: string; kind: LockableApp['kind']; packages: string[] }[];
+  /** Daily windows when these apps can't be opened at all. Days: 0 = Sunday. */
+  blocks: { start: string; end: string; days: number[]; apps: { id: string; packages: string[] }[] }[];
+  /** A focus timer: these apps stay shut until `until` (ms since 1970). */
+  focus: { until: number; apps: { id: string; packages: string[] }[] } | null;
   scrolls: number;
   screenSeconds: number;
   unlockTime: string;
   ackSeq: number;
 }
 
+function packagesOf(a: Account, ids: string[]): { id: string; packages: string[] }[] {
+  return ids.flatMap((id) => {
+    const app = appFor(a, id);
+    return app ? [{ id, packages: app.packages }] : [];
+  });
+}
+
 /** The rules one phone should enforce for this account. */
 export function nativeRules(a: Account, deviceId: string): NativeRules {
   return {
-    enabled: a.onboarded && a.lockedApps.length > 0,
+    enabled: a.onboarded && (a.lockedApps.length > 0 || (a.blocks?.length ?? 0) > 0 || !!a.focus),
     apps: lockedAppsOf(a).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
+    blocks: (a.blocks ?? []).map((b) => ({ start: b.start, end: b.end, days: b.days, apps: packagesOf(a, b.apps) })),
+    focus: a.focus ? { until: a.focus.until, apps: packagesOf(a, a.focus.apps) } : null,
     scrolls: a.scrolls,
     screenSeconds: a.screenSeconds,
     unlockTime: a.unlockTime ?? '',
@@ -1094,9 +1218,8 @@ export function contactsOf(data: AppData, meId: string): Contact[] {
         checksWith: false,
       });
   }
-  const myKey = normalizeContact(me.email);
   for (const a of Object.values(data.accounts)) {
-    if (a.verifier && normalizeContact(a.verifier.contact) === myKey) add(a, 'You check their work', true);
+    if (a.verifier && isContactOf(me, a.verifier.contact)) add(a, 'You check their work', true);
   }
   // People still waiting on a photo I can check, even if they've since picked someone else.
   for (const t of requestsFor(data, meId)) if (!t.verifierId) add(data.accounts[t.ownerId], 'You check their work', true);

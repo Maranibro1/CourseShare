@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { PHOTO, addTask, onboardPersonal, signIn, signOut, signUp } from './helpers';
+import { PHOTO, addTask, onboardPersonal, proofPhoto, signIn, signOut, signUp } from './helpers';
 
 test('earn scrolls with questions, then spend them swiping', async ({ page }) => {
   await signUp(page, 'Sam', 'sam@example.com');
@@ -11,6 +11,7 @@ test('earn scrolls with questions, then spend them swiping', async ({ page }) =>
   await page.getByRole('link', { name: /Read 20 pages/ }).click();
   await expect(page.getByText('Not started')).toBeVisible();
   await page.getByRole('link', { name: "I'm done, verify it" }).click();
+  await proofPhoto(page);
 
   await expect(page.getByRole('heading', { name: /What did you read/ })).toBeVisible();
   await page.getByLabel('Your answer').fill('Atomic Habits, chapter two');
@@ -83,6 +84,7 @@ test('screen time counts down while a game is open', async ({ page }) => {
   await addTask(page, 'Go to the gym', '10', 'questions', 'Screen time');
   await page.getByRole('link', { name: /Go to the gym/ }).click();
   await page.getByRole('link', { name: "I'm done, verify it" }).click();
+  await proofPhoto(page);
   for (const answer of ['Squats and push-ups', 'One hour at the gym', 'Tired but happy']) {
     await page.getByLabel('Your answer').fill(answer);
     const next = page.getByRole('button', { name: /Next|Finish/ });
@@ -191,6 +193,7 @@ test('the Verify tab proves your tasks and checks other people\'s', async ({ pag
 
   // And the questions task.
   await page.getByRole('link', { name: 'Prove Read 20 pages' }).click();
+  await proofPhoto(page);
   await expect(page.getByRole('heading', { name: /What did you read/ })).toBeVisible();
   await signOut(page);
 
@@ -221,6 +224,7 @@ test('YouTube: Shorts use scrolls, videos use screen time', async ({ page }) => 
   await addTask(page, 'Read 20 pages', '50', 'questions');
   await page.getByRole('link', { name: /Read 20 pages/ }).click();
   await page.getByRole('link', { name: "I'm done, verify it" }).click();
+  await proofPhoto(page);
   for (const answer of ['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.']) {
     await page.getByLabel('Your answer').fill(answer);
     const next = page.getByRole('button', { name: 'Next' });
@@ -290,6 +294,73 @@ test('an app found on the phone can be locked on screen time', async ({ page }) 
   await page.getByRole('button', { name: 'Open Roblox' }).click();
   await expect(page.getByRole('heading', { name: 'Roblox is locked' })).toBeVisible();
   await expect(page.getByText('Your screen time is used up.')).toBeVisible();
+});
+
+test('lock screen messages, a focus timer and a blocked time', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+
+  // Own lock screen message.
+  await page.goto('/#/profile');
+  await page.getByRole('link', { name: /Lock screen messages/ }).click();
+  await page.getByLabel('Your own message').fill('Mum believes in you');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.getByText('“Mum believes in you”')).toBeVisible();
+
+  // With no scrolls, TikTok's lock screen shows it.
+  await page.goto('/#/locked/tiktok');
+  await expect(page.getByText('“Mum believes in you”')).toBeVisible();
+
+  // A 15-minute focus timer on TikTok.
+  await page.goto('/#/settings/blocks');
+  await page.getByRole('button', { name: '15 min' }).click();
+  await page.getByRole('button', { name: 'Start 15-minute focus timer' }).click();
+  await page.getByRole('button', { name: 'Start now' }).click();
+  await expect(page.getByTestId('focus-countdown')).toHaveText(/1[45] min/);
+  await page.goto('/#/apps');
+  await expect(page.getByRole('button', { name: 'Open TikTok' })).toContainText('Blocked');
+  await page.getByRole('button', { name: 'Open TikTok' }).click();
+  await expect(page.getByRole('heading', { name: 'TikTok is blocked' })).toBeVisible();
+  await expect(page.getByText('Your focus timer is running.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Emergency unlock' })).toHaveCount(0);
+
+  // A daily blocked time for Snapchat (not even locked) covering right now.
+  await page.goto('/#/settings/blocks');
+  await page.getByRole('button', { name: '+ Add' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('All day');
+  await page.getByLabel('From').fill('00:00');
+  await page.getByLabel('Until').fill('23:59');
+  for (const app of ['TikTok', 'Instagram', 'Facebook', 'YouTube', 'Minecraft', 'Netflix']) await page.getByLabel(`Block ${app}`).uncheck();
+  await page.getByLabel('Block Snapchat').check();
+  await page.getByRole('button', { name: 'Save blocked time' }).click();
+  await expect(page.getByText(/All day · On until/)).toBeVisible();
+  // It's on, so it can't be deleted until it ends.
+  await expect(page.getByRole('button', { name: 'Delete All day' })).toBeDisabled();
+  await page.goto('/#/locked/snapchat');
+  await expect(page.getByRole('heading', { name: 'Snapchat is blocked' })).toBeVisible();
+});
+
+test('questions keep the photo and answers as proof', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  await addTask(page, 'Read 20 pages', '50', 'questions');
+  await page.getByRole('link', { name: /Read 20 pages/ }).click();
+  await page.getByRole('link', { name: "I'm done, verify it" }).click();
+  await expect(page.getByRole('button', { name: 'Next: the questions' })).toBeDisabled();
+  await proofPhoto(page);
+  for (const answer of ['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.']) {
+    await page.getByLabel('Your answer').fill(answer);
+    const next = page.getByRole('button', { name: /Next|Finish/ });
+    if ((await next.textContent()) === 'Finish') await page.getByText('I honestly completed this task').click();
+    await next.click();
+  }
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('link', { name: /Read 20 pages/ }).click();
+  const proof = page.getByTestId('proof');
+  await expect(proof.getByRole('heading', { name: 'Your proof' })).toBeVisible();
+  await expect(proof.getByRole('img', { name: 'Photo of Read 20 pages' })).toBeVisible();
+  await expect(proof.getByText('Atomic Habits, chapter two')).toBeVisible();
+  await expect(proof.getByText('What did you read? Name the book, chapter or article.')).toBeVisible();
 });
 
 test('signing in with the wrong password is refused', async ({ page }) => {

@@ -4,15 +4,15 @@
  * connected to (with private fields removed), and the tasks, messages and
  * notifications that involve them.
  */
-import { approverFor, canApprove, childrenOf, contactsOf, normalizeContact } from './logic';
+import { approverFor, canApprove, childrenOf, contactsOf, isContactOf } from './logic';
 import type { Account, AppData } from './types';
 
 /**
  * Name and contact only; balances, history and settings stay private. The one
  * setting kept is "who checks my work", and only when the viewer is that person.
  */
-export function publicAccount(a: Account, viewerEmail = ''): Account {
-  const picksViewer = !!a.verifier && !!viewerEmail && normalizeContact(a.verifier.contact) === normalizeContact(viewerEmail);
+export function publicAccount(a: Account, viewer?: Pick<Account, 'email' | 'username'>): Account {
+  const picksViewer = !!a.verifier && !!viewer && isContactOf(viewer, a.verifier.contact);
   return {
     ...a,
     passwordHash: '',
@@ -55,7 +55,7 @@ export function viewFor(data: AppData, meId: string): AppData {
   const accounts: AppData['accounts'] = { [meId]: privateAccount(me) };
   for (const c of children) accounts[c.id] = privateAccount(c);
   const addPublic = (a: Account | undefined) => {
-    if (a && !accounts[a.id]) accounts[a.id] = publicAccount(a, me.email);
+    if (a && !accounts[a.id]) accounts[a.id] = publicAccount(a, me);
   };
   for (const c of contactsOf(data, meId)) if (c.id) addPublic(data.accounts[c.id]);
   for (const t of Object.values(tasks)) {
