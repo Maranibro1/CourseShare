@@ -38,6 +38,9 @@ function world() {
   d = updateAccount(d, kofi, { username: `kofi_${run}`, onboarded: true, verifier: { contact: `@Wanjiru_${run}`, relation: 'Friend' } });
   const t2 = addTask(d, kofi, { title: 'Gym', rewardKind: 'minutes', amount: 20, verify: 'photo', repeat: 'never' }, T0);
   d = submitPhoto(t2.data, t2.id, kofi, T0);
+  // Kofi lets Wanjiru review his self-checked tasks, so she also sees his questions task.
+  d = updateAccount(d, kofi, { letFriendsReview: true });
+  d = addTask(d, kofi, { title: 'Read', rewardKind: 'scrolls', amount: 5, verify: 'questions', repeat: 'never' }, T0).data;
   d = updateAccount(d, sam, { onboarded: true, verifier: { contact: `EMMA+${run}@example.com`, relation: 'Sister' } });
   const t1 = addTask(d, sam, { title: 'Essay', rewardKind: 'scrolls', amount: 50, verify: 'photo', repeat: 'never' }, T0);
   d = submitPhoto(t1.data, t1.id, sam, T0);
@@ -108,7 +111,7 @@ describe.each(repos)('$name repo', ({ make }) => {
     // Picked by @username: Wanjiru sees Kofi and his photo, and Kofi sees her.
     const wanjiru = await repo.load(ids.wanjiru);
     expect(Object.keys(wanjiru.data.accounts).sort()).toEqual([ids.kofi, ids.wanjiru].sort());
-    expect(Object.values(wanjiru.data.tasks).map((t) => t.title)).toEqual(['Gym']);
+    expect(Object.values(wanjiru.data.tasks).map((t) => t.title).sort()).toEqual(['Gym', 'Read']);
     expect(Object.keys((await repo.load(ids.kofi)).data.accounts).sort()).toEqual([ids.kofi, ids.wanjiru].sort());
   });
 

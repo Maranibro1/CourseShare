@@ -332,7 +332,7 @@ test('lock screen messages, a focus timer and a blocked time', async ({ page }) 
   await page.getByLabel('Until').fill('23:59');
   for (const app of ['TikTok', 'Instagram', 'Facebook', 'YouTube', 'Minecraft', 'Netflix']) await page.getByLabel(`Block ${app}`).uncheck();
   await page.getByLabel('Block Snapchat').check();
-  await page.getByRole('button', { name: 'Save blocked time' }).click();
+  await page.getByRole('button', { name: 'Save restriction' }).click();
   await expect(page.getByText(/All day · On until/)).toBeVisible();
   // It's on, so it can't be deleted until it ends.
   await expect(page.getByRole('button', { name: 'Delete All day' })).toBeDisabled();
@@ -361,6 +361,47 @@ test('questions keep the photo and answers as proof', async ({ page }) => {
   await expect(proof.getByRole('img', { name: 'Photo of Read 20 pages' })).toBeVisible();
   await expect(proof.getByText('Atomic Habits, chapter two')).toBeVisible();
   await expect(proof.getByText('What did you read? Name the book, chapter or article.')).toBeVisible();
+});
+
+test('the focus timer and restrictions are on the home screen, with a time limit', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  const card = page.getByTestId('focus-card');
+  await expect(card).toBeVisible();
+  // Customise: 25 minutes.
+  await card.getByLabel('Minutes').fill('25');
+  await card.getByRole('button', { name: 'Start 25-minute focus timer' }).click();
+  await page.getByRole('button', { name: 'Start now' }).click();
+  await expect(card.getByTestId('focus-countdown')).toHaveText(/2[45] min/);
+
+  // A restriction from one time to another that limits minutes instead of blocking.
+  await page.getByTestId('restrictions-card').getByRole('link', { name: 'Set up' }).click();
+  await page.getByRole('button', { name: '+ Add' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('After school');
+  await page.getByLabel('From').fill('15:00');
+  await page.getByLabel('Until').fill('18:00');
+  await page.getByRole('button', { name: 'Limit minutes' }).click();
+  await page.getByLabel('Minutes allowed in total during this time').fill('30');
+  await page.getByRole('button', { name: 'Save restriction' }).click();
+  await expect(page.getByText('Up to 30 min')).toBeVisible();
+  await page.goto('/#/home');
+  await expect(page.getByTestId('restrictions-card')).toContainText('After school');
+  await expect(page.getByTestId('restrictions-card')).toContainText('Up to 30 min');
+});
+
+test('the lock screen background can be changed', async ({ page }) => {
+  await signUp(page, 'Sam', 'sam@example.com');
+  await onboardPersonal(page, null);
+  await page.goto('/#/profile');
+  await page.getByRole('link', { name: /Lock screen background/ }).click();
+  await page.getByRole('button', { name: 'Night' }).click();
+  await expect(page.getByRole('button', { name: 'Night' })).toHaveAttribute('aria-pressed', 'true');
+  await page.goto('/#/locked/tiktok');
+  await expect(page.locator('main.on-dark')).toBeVisible();
+  // Your own photo.
+  await page.goto('/#/settings/background');
+  await page.getByTestId('background-input').setInputFiles(PHOTO);
+  await expect(page.getByRole('button', { name: 'Your photo' })).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('signing in with the wrong password is refused', async ({ page }) => {

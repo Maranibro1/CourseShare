@@ -63,6 +63,8 @@ final class LockStore {
     /** Daily blocked windows and the focus timer, as sent by the app (see nativeRules in logic.ts). */
     private JSONArray blocksJson = new JSONArray();
     private JSONObject focusJson;
+    /** Use counted against each restriction window's limit, by "windowId@windowStart". */
+    private final Map<String, Double> limitUse = new HashMap<>();
     private long ackSeq;
     private long nextSeq = 1;
     /** Events with seq at or below this have been handed to the app and must not change. */
@@ -133,6 +135,7 @@ final class LockStore {
             }
             for (int i = 0; i < blocksJson.length(); i++) {
                 JSONObject b = blocksJson.getJSONObject(i);
+                if (b.has("limit")) continue; // a limit only shuts the app once it's used up
                 String id = idFor(b.optJSONArray("apps"), packageName);
                 if (id != null && windowOn(b, now)) return id;
             }
@@ -140,6 +143,82 @@ final class LockStore {
             // Our own JSON; a bad entry just doesn't block.
         }
         return null;
+    }
+
+    /* ───────── Limits in restriction windows ───────── */
+
+    /** Is there a limit of this kind ("scrolls" or "minutes") on the package right now? */
+    synchronized boolean hasLimit(String packageName, String kind, long now) {
+        return !activeLimits(packageName, kind, now).isEmpty();
+    }
+
+    /**
+     * Adds use (swipes, or seconds) to every limit of this kind covering the
+     * package right now. Returns true if any limit counted it.
+     */
+    synchronized boolean countLimit(String packageName, String kind, double amount, long now) {
+        if (amount <= 0) return false;
+        List<String> keys = activeLimits(packageName, kind, now);
+        for (String key : keys) limitUse.put(key, limitUse.containsKey(key) ? limitUse.get(key) + amount : amount);
+        if (!keys.isEmpty()) save();
+        return !keys.isEmpty();
+    }
+
+    /** The app id whose limit in a restriction window is used up right now, or null. */
+    synchronized String limitReachedAppId(String packageName, long now) {
+        if (!enabled || packageName == null) return null;
+        try {
+            for (int i = 0; i < blocksJson.length(); i++) {
+                JSONObject b = blocksJson.getJSONObject(i);
+                JSONObject limit = b.optJSONObject("limit");
+                if (limit == null) continue;
+                String id = idFor(b.optJSONArray("apps"), packageName);
+                long start = windowStart(b, now);
+                if (id == null || start < 0) continue;
+                Double used = limitUse.get(b.optString("id") + "@" + start);
+                double max = limit.optDouble("amount", 0) * (KIND_MINUTES.equals(limit.optString("kind")) ? 60 : 1);
+                if (used != null && used >= max) return id;
+            }
+        } catch (JSONException ignored) {
+            // Our own JSON.
+        }
+        return null;
+    }
+
+    /** Counter keys ("windowId@windowStart") of the limits of this kind covering the package now. */
+    private List<String> activeLimits(String packageName, String kind, long now) {
+        List<String> out = new ArrayList<>();
+        if (!enabled || packageName == null) return out;
+        try {
+            for (int i = 0; i < blocksJson.length(); i++) {
+                JSONObject b = blocksJson.getJSONObject(i);
+                JSONObject limit = b.optJSONObject("limit");
+                if (limit == null || !kind.equals(limit.optString("kind"))) continue;
+                if (idFor(b.optJSONArray("apps"), packageName) == null) continue;
+                long start = windowStart(b, now);
+                if (start >= 0) out.add(b.optString("id") + "@" + start);
+            }
+        } catch (JSONException ignored) {
+            // Our own JSON.
+        }
+        return out;
+    }
+
+    /** When the window that's on at {@code now} started (ms), or -1 when it's off. */
+    static long windowStart(JSONObject b, long now) throws JSONException {
+        if (!windowOn(b, now)) return -1;
+        int start = minutes(b.optString("start", ""));
+        int end = minutes(b.optString("end", ""));
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(now);
+        int t = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+        // Over midnight and before the end: it started yesterday evening.
+        if (start > end && t < end) c.add(Calendar.DAY_OF_MONTH, -1);
+        c.set(Calendar.HOUR_OF_DAY, start / 60);
+        c.set(Calendar.MINUTE, start % 60);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
     }
 
     private static String idFor(JSONArray apps, String packageName) throws JSONException {
@@ -277,6 +356,14 @@ final class LockStore {
             blocksJson = s.optJSONArray("blocks");
             if (blocksJson == null) blocksJson = new JSONArray();
             focusJson = s.optJSONObject("focus");
+            JSONObject use = s.optJSONObject("limitUse");
+            limitUse.clear();
+            if (use != null) {
+                for (java.util.Iterator<String> it = use.keys(); it.hasNext(); ) {
+                    String k = it.next();
+                    limitUse.put(k, use.optDouble(k, 0));
+                }
+            }
             baseScrolls = s.optLong("baseScrolls", 0);
             baseSeconds = s.optDouble("baseSeconds", 0);
             unlockTime = s.optString("unlockTime", "");
@@ -301,6 +388,15 @@ final class LockStore {
             s.put("apps", appsJson);
             s.put("blocks", blocksJson);
             if (focusJson != null) s.put("focus", focusJson);
+            // Only windows from the last two days matter; drop older counters.
+            long cutoff = System.currentTimeMillis() - 2L * 24 * 60 * 60 * 1000;
+            JSONObject use = new JSONObject();
+            for (Map.Entry<String, Double> e : limitUse.entrySet()) {
+                String k = e.getKey();
+                long start = Long.parseLong(k.substring(k.lastIndexOf('@') + 1));
+                if (start >= cutoff) use.put(k, e.getValue());
+            }
+            s.put("limitUse", use);
             s.put("baseScrolls", baseScrolls);
             s.put("baseSeconds", baseSeconds);
             s.put("unlockTime", unlockTime);

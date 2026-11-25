@@ -10,7 +10,7 @@ import { ApproveProof, ChildHome, ChildRules, ChildTaskForm, ChildWeek, JoinFami
 import { Home } from './screens/Home';
 import { Chat, Messages } from './screens/Messages';
 import { AddVerifier, ChooseMode, Permissions, PickApps, UnlockTime } from './screens/Onboarding';
-import { Blocks, LockMessages } from './screens/Controls';
+import { Blocks, LockBackground, LockMessages, TaskHistory } from './screens/Controls';
 import { Requests } from './screens/Requests';
 import { Verify } from './screens/Verify';
 import { Profile, Settings } from './screens/Settings';
@@ -33,6 +33,8 @@ const CHILD_ALLOWED = [
   '/profile',
   '/settings/messages',
   '/settings/blocks',
+  '/settings/background',
+  '/history',
   '/messages',
   '/messages/:id',
 ];
@@ -114,6 +116,9 @@ export default function App() {
               <Route path="/profile" element={<Profile />} />
               <Route path="/settings/messages" element={<LockMessages />} />
               <Route path="/settings/blocks" element={<Blocks />} />
+              <Route path="/settings/background" element={<LockBackground />} />
+              <Route path="/history" element={<TaskHistory />} />
+              <Route path="/history/:personId" element={<TaskHistory />} />
               <Route path="/requests" element={<Requests />} />
               <Route path="/verify" element={<Verify />} />
               <Route path="/messages" element={<Messages />} />

@@ -29,6 +29,7 @@ import {
   isContactOf,
   isValidPersonContact,
   setBlocks,
+  disallowProof,
   startFocus,
   remindApprover,
   requestRedo,
@@ -111,6 +112,15 @@ function phoneApps(v: unknown) {
 }
 
 const REWARD_KINDS: RewardKind[] = ['scrolls', 'minutes'];
+
+/** Lock screen backgrounds: presets, or "photo" for a picture kept only on the phone. */
+export const LOCK_BACKGROUNDS = ['plain', 'mint', 'sunrise', 'ocean', 'night', 'forest', 'photo'];
+
+function limitOf(v: unknown): { kind: RewardKind; amount: number } {
+  const o = v as Record<string, unknown>;
+  if (!o || typeof o !== 'object') bad();
+  return { kind: oneOf(o.kind, REWARD_KINDS), amount: int(o.amount) };
+}
 const REPEATS: Repeat[] = ['never', 'daily', 'weekdays'];
 const VERIFY: VerifyMethod[] = ['photo', 'questions', 'claude'];
 
@@ -211,6 +221,15 @@ function updateProfile(data: AppData, actor: string, args: Record<string, unknow
         out.username = u;
         break;
       }
+      case 'lockBackground': {
+        const v = str(value, 20);
+        if (!LOCK_BACKGROUNDS.includes(v)) bad();
+        out.lockBackground = v;
+        break;
+      }
+      case 'letFriendsReview':
+        out.letFriendsReview = bool(value);
+        break;
       case 'lockMessages': {
         if (!Array.isArray(value) || value.length > 20) bad();
         const list = (value as unknown[]).map((m) => str(m, 120).replace(/\s+/g, ' ').trim()).filter(Boolean);
@@ -296,10 +315,12 @@ export const ACTIONS = {
           if (n < 0 || n > 6) bad();
           return n;
         }),
+        ...(o.limit === undefined || o.limit === null ? {} : { limit: limitOf(o.limit) }),
       };
     });
     return setBlocks(d, actor, a.childId === undefined ? actor : id(a.childId), blocks, now);
   },
+  disallowProof: (d, actor, a, now) => disallowProof(d, actor, id(a.taskId), id(a.proofId), a.reason === undefined ? '' : str(a.reason, 200), now),
   startFocus: (d, actor, a, now) => {
     if (!Array.isArray(a.apps) || a.apps.length > MAX_LOCKED_APPS) bad();
     return startFocus(d, actor, a.childId === undefined ? actor : id(a.childId), [...new Set((a.apps as unknown[]).map(appId))], int(a.minutes), now);

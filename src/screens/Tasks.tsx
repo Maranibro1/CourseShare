@@ -298,12 +298,17 @@ export function TaskDetail() {
         <Row label="Repeats" value={REPEAT_LABEL[task.repeat]} strong />
         {task.completions.length > 0 && <Row label="Times completed" value={task.completions.length} strong />}
       </div>
-      {task.lastProof && (
+      {task.proofs?.[0] && (
         <div className="stack-12" data-testid="proof">
           <h2 className="h2">{isOwner ? 'Your proof' : 'Their proof'}</h2>
-          <span className="small">{dayLabel(task.lastProof.at)}</span>
-          {task.lastProof.photo && <StoredPhoto taskId={task.id} height={180} label={`Photo of ${task.title}`} />}
-          {task.lastProof.answers.map((x, i) => (
+          <span className="small">{dayLabel(task.proofs[0].at)}</span>
+          {task.proofs[0].disallowed && (
+            <div className="redo-note">
+              Disallowed{task.proofs[0].disallowed.reason ? `: ${task.proofs[0].disallowed.reason}` : ''}
+            </div>
+          )}
+          {task.proofs[0].photo && <StoredPhoto taskId={task.id} height={180} label={`Photo of ${task.title}`} />}
+          {task.proofs[0].answers.map((x, i) => (
             <div key={i} className="stack-4">
               <span className="small">{x.q}</span>
               <span>{x.a}</span>

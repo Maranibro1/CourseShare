@@ -40,6 +40,11 @@ export interface BlockSchedule {
   end: string;
   /** 0 = Sunday … 6 = Saturday: the days the window starts on. */
   days: number[];
+  /**
+   * Without this, the apps are blocked completely. With it, they can be used
+   * up to this much in total during each window (minutes of use, or swipes).
+   */
+  limit?: { kind: RewardKind; amount: number };
 }
 
 /** A countdown: these apps stay shut until `until`. */
@@ -49,11 +54,16 @@ export interface FocusTimer {
   until: number;
 }
 
-/** What someone showed to finish a questions task: their answers, and that they took a photo. */
+/** What someone showed to finish a task by themselves: their answers, and the photo they took. */
 export interface Proof {
+  id: string;
   at: number;
   answers: { q: string; a: string }[];
   photo: boolean;
+  /** What it paid, so a disallowed proof can be taken back exactly. */
+  reward: { kind: RewardKind; amount: number };
+  /** Set when the person who checks their work disallowed it. */
+  disallowed?: { by: string; at: number; reason: string };
 }
 
 /** An app the phone reported as installed: its package name and the name on its icon. */
@@ -111,6 +121,10 @@ export interface Account {
   focus?: FocusTimer | null;
   /** Words of encouragement shown on the lock screen, picked or written by the person. */
   lockMessages?: string[];
+  /** Lock screen background: a preset name, or "photo" for a picture kept on the phone. */
+  lockBackground?: string;
+  /** Lets the person who checks your work look through your self-checked tasks and disallow one. */
+  letFriendsReview?: boolean;
   /** How many times Claude checked this person's proof today, to keep costs bounded. */
   claudeChecks?: { day: string; count: number };
 }
@@ -141,8 +155,8 @@ export interface Task {
   remindedAt: number | null;
   /** Log of completions, so repeating tasks keep their history. */
   completions: number[];
-  /** The answers (and photo) last given to finish this task with questions. */
-  lastProof?: Proof;
+  /** Self-checked completions, newest first (the last 10). */
+  proofs?: Proof[];
 }
 
 export interface AppNotification {

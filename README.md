@@ -29,7 +29,9 @@ The app comes in three pieces, all in this repository:
 - **Usernames.** Everyone picks an @username at sign-up. Pick your verifier by @username from the Verify tab (or verify your own tasks with a photo and questions), and sign in with your username, email or phone.
 - **Proof is kept.** Questions start with a photo of what you did; the photo and your answers are saved with the task, under *Your proof*.
 - **Lock screen messages.** Pick encouraging lines, or write your own; one shows each time an app is locked.
-- **Blocked times and focus timers.** Block chosen apps completely during a daily window (like 9 PM to 7 AM on school nights), or for a countdown starting now (15 minutes to 12 hours). Blocked apps can't open even with scrolls or after the unlock time. A blocked time can't be removed or loosened while it's on, and a focus timer can't be stopped early. Parents set these for their children. The phone lock enforces them even when Kazikwanza is closed.
+- **Restrictions and focus timers (on the home screen).** From one time of day to another (like 9 PM to 7 AM on school nights), block chosen apps completely, or limit them to so many minutes or swipes in total for that window. The focus timer blocks chosen apps for a countdown starting now (any length up to 12 hours). These apply even with scrolls or after the unlock time; an active restriction can't be loosened and a timer can't be stopped early. Parents set them for their children. The phone lock enforces them even when Kazikwanza is closed.
+- **Lock screen background.** Pick a colour, or your own photo (kept on the phone), under Profile.
+- **Friends can review self-checks.** Turn on "Let my verifier review my self-checked tasks" in Profile, and the person who checks your work can open your task history (photos and answers) and disallow a self-check within 7 days; the reward is taken back and you're told why.
 - **People I verify for.** The icon at the top of the home screen lists the people who picked you, with a badge for photos waiting.
 - **Any app can be limited.** On Android, the app lists every app installed on the phone, so you can give any of them a screen-time limit. A parent sees their child's apps on their own phone. The phone app, Settings and the home screen are never locked, so nobody is cut off from calling for help.
 - **Messages.**
@@ -39,7 +41,7 @@ The app comes in three pieces, all in this repository:
 - **Wallet.** Balances, this week's totals, your streak and history. Swipes and game time from the phone show up here.
 - **Emergency unlock.** After a 1-minute wait you get 10 scrolls or 5 minutes, 3 times a week. Children ask their parent for more time instead.
 - **Family mode.**
-  - The parent links a child with a 6-character code or a QR code.
+  - The parent links a child with a 6-character code.
   - The parent sets the child's tasks, locked apps and unlock time, approves photos, and sees the child's week.
 - **Get the app.** The welcome screen offers the Android download, an *Install app* button on Android and computers, and Add to Home Screen steps on iPhone.
 
@@ -47,7 +49,7 @@ The app comes in three pieces, all in this repository:
 
 `KaziAccessibilityService` is an Android accessibility service. It looks at *which* app is on screen and *whether* a list moved, and inside YouTube only, at the names of the views on screen (to find YouTube's Shorts player and video player). It never reads posts, messages or what you watch.
 
-- **Swipes.** Each swipe up or down in a locked scrolling app costs 1 scroll: TikTok, Facebook, X, and in Instagram both feed posts and Reels. Sideways swipes (story trays, photo carousels) and the moment an app restores its scroll position on opening are free.
+- **Swipes.** One swipe is one scroll, however long you watch each post. Each swipe up or down in a locked scrolling app costs 1 scroll: TikTok, Facebook, X, and in Instagram both feed posts and Reels. Sideways swipes (story trays, photo carousels) and the moment an app restores its scroll position on opening are free.
 - **YouTube.** Swiping through Shorts costs 1 scroll per swipe. A regular video uses screen time while it's on screen. Browsing the home feed (and scrolling a video's comments) is free. YouTube opens while you have either scrolls or screen time; with no scrolls, Shorts lock but videos still play, and the other way round.
 - **Locking.** With no scrolls left, the phone goes to the home screen and Kazikwanza's lock screen opens.
 - **Screen time.** Games and every other locked app use screen time while they're on screen. The clock stops when the screen turns off.

@@ -20,7 +20,9 @@ import {
 import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { KaziLock, isNativeAndroid, pumpNative } from '../lib/native';
 import { formatClock, formatMinSec, formatTimeOfDay } from '../lib/time';
-import { activeBlock, type ActiveBlock } from '../lib/blocks';
+import { activeBlock, activeLimit, type ActiveBlock } from '../lib/blocks';
+import { DEFAULT_CHEERS } from '../lib/cheers';
+import { useLockBackground } from '../lib/backgrounds';
 import type { Account } from '../lib/types';
 import { homePath } from './Tasks';
 
@@ -317,8 +319,6 @@ function MixedApp({ app }: { app: LockableApp }) {
 
 /* ───────── Locked ───────── */
 
-/** Shown when nobody has picked their own lock-screen messages yet. */
-export const DEFAULT_CHEERS = ['Do the work first. Then scroll.', 'Future you will thank you.', 'One task at a time. You’ve got this.'];
 
 function pickMessage(messages: string[] | undefined): string {
   const list = messages && messages.length > 0 ? messages : DEFAULT_CHEERS;
@@ -334,17 +334,18 @@ function countdown(ms: number): string {
 }
 
 /** A blocked time or focus timer: the app can't open at all until it ends, so no unlocks are offered. */
-function Blocked({ app, block, cheer, now }: { app: LockableApp; block: ActiveBlock; cheer: string; now: number }) {
+function Blocked({ app, block, cheer, now, note }: { app: LockableApp; block: ActiveBlock; cheer: string; now: number; note?: string }) {
   const me = useAccount();
+  const bg = useLockBackground(me.lockBackground);
   return (
-    <main className="screen centered">
+    <main className={`screen centered${bg.dark ? ' on-dark' : ''}`} style={bg.style}>
       <div className="stack center" style={{ gap: 16 }}>
         <div className="icon-badge">
           <TimerIcon size={32} color="#15803D" />
         </div>
         <h1 className="h1">{app.name} is blocked</h1>
         <p className="lead">
-          {block.kind === 'focus' ? 'Your focus timer is running.' : `${block.label} is on.`} It opens again at {formatTimeOfDay(block.until)}.
+          {note ?? (block.kind === 'focus' ? 'Your focus timer is running.' : `${block.label} is on.`)} It opens again at {formatTimeOfDay(block.until)}.
         </p>
         <span className="big-number" data-testid="block-countdown" style={{ fontSize: 44 }}>
           {countdown(block.until - now)}
@@ -370,9 +371,23 @@ export function Locked() {
   const navigate = useNavigate();
   const app = appFor(me, appId);
   const [cheer] = useState(() => pickMessage(me.lockMessages));
+  const bg = useLockBackground(me.lockBackground);
   if (!app) return null;
   const block = activeBlock(me, app.id, now);
   if (block) return <Blocked app={app} block={block} cheer={cheer} now={now} />;
+  // The phone says this window's limit is used up.
+  const limit = search.get('part') === 'limit' ? activeLimit(me, app.id, now) : null;
+  if (limit) {
+    return (
+      <Blocked
+        app={app}
+        block={{ until: limit.until, label: limit.name, kind: 'schedule' }}
+        cheer={cheer}
+        now={now}
+        note={`You've used your ${limit.limit!.kind === 'scrolls' ? `${limit.limit!.amount} scrolls` : `${limit.limit!.amount} minutes`} for “${limit.name}”.`}
+      />
+    );
+  }
 
   // For YouTube, which part ran out: Shorts (scrolls) or videos (screen time).
   const partParam = search.get('part');
@@ -405,7 +420,7 @@ export function Locked() {
   if (part === 'minutes' && appAccess === 'balance') body += ' Shorts still work with your scrolls.';
 
   return (
-    <main className="screen centered">
+    <main className={`screen centered${bg.dark ? ' on-dark' : ''}`} style={bg.style}>
       <div className="stack center" style={{ gap: 16 }}>
         <div className="icon-badge">
           {kind === 'minutes' ? <TimerIcon size={32} color="#15803D" /> : <LockIcon size={32} color="#15803D" />}

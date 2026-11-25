@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChatIcon } from '../components/Icons';
 import { Avatar, BackButton, Sheet, StoredPhoto } from '../components/ui';
-import { contactsOf, requestsFor, reviewedBy, rewardLabel } from '../lib/logic';
+import { canReview, contactsOf, requestsFor, reviewedBy, rewardLabel } from '../lib/logic';
 import { deletePhoto } from '../lib/photos';
 import { act, toast, useAccount, useData, useNow } from '../lib/store';
 import { timeAgo } from '../lib/time';
@@ -118,6 +118,11 @@ export function Requests() {
                   <span className="strong">{p.name}</span>
                   <span className="small">{waiting ? `${waiting} photo${waiting === 1 ? '' : 's'} to check` : p.roles.join(' · ')}</span>
                 </div>
+                {p.id && canReview(data, me.id, p.id) && (
+                  <Link to={`/history/${p.id}`} className="link-btn strong" style={{ fontSize: 14 }} aria-label={`${p.name}'s task history`}>
+                    History
+                  </Link>
+                )}
                 <Link to={`/messages/${p.id}`} className="icon-circle sm" aria-label={`Message ${p.name}`}>
                   <ChatIcon size={20} />
                 </Link>

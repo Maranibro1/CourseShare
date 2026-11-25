@@ -276,6 +276,31 @@ public class LockStoreTest {
     }
 
     @Test
+    public void limitsCountUseInTheirWindowAndShutTheAppWhenUsedUp() throws Exception {
+        long now = System.currentTimeMillis();
+        String allDay = "\"start\":\"00:00\",\"end\":\"23:59\",\"days\":[0,1,2,3,4,5,6]";
+        rules.put("blocks", new JSONArray(
+            "[{\"id\":\"w1\"," + allDay + ",\"limit\":{\"kind\":\"scrolls\",\"amount\":2}," +
+            "\"apps\":[{\"id\":\"x\",\"packages\":[\"com.twitter.android\"]}]}," +
+            "{\"id\":\"w2\"," + allDay + ",\"limit\":{\"kind\":\"minutes\",\"amount\":1}," +
+            "\"apps\":[{\"id\":\"minecraft\",\"packages\":[\"com.mojang.minecraftpe\"]}]}]"));
+        store.sync(rules);
+        assertTrue(store.hasLimit("com.twitter.android", LockStore.KIND_SCROLLS, now));
+        assertFalse(store.hasLimit("com.twitter.android", LockStore.KIND_MINUTES, now));
+        assertNull("a limit isn't a block", store.blockedAppId("com.twitter.android", now));
+        assertTrue(store.countLimit("com.twitter.android", LockStore.KIND_SCROLLS, 1, now));
+        assertNull("1 of 2 swipes", store.limitReachedAppId("com.twitter.android", now));
+        store.countLimit("com.twitter.android", LockStore.KIND_SCROLLS, 1, now);
+        assertEquals("2 of 2 swipes", "x", store.limitReachedAppId("com.twitter.android", now));
+        store.countLimit("com.mojang.minecraftpe", LockStore.KIND_MINUTES, 59, now);
+        assertNull("59 of 60 seconds", store.limitReachedAppId("com.mojang.minecraftpe", now));
+        store.countLimit("com.mojang.minecraftpe", LockStore.KIND_MINUTES, 1, now);
+        assertEquals("minecraft", store.limitReachedAppId("com.mojang.minecraftpe", now));
+        assertFalse("other apps aren't counted", store.countLimit("com.zhiliaoapp.musically", LockStore.KIND_SCROLLS, 1, now));
+        assertEquals("survives a restart", "x", new LockStore(context).limitReachedAppId("com.twitter.android", now));
+    }
+
+    @Test
     public void freeFromTheUnlockTimeUntilMidnight() throws Exception {
         rules.put("unlockTime", "13:00");
         store.sync(rules);

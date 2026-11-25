@@ -115,12 +115,17 @@ export function subsetFor(full: AppData, actorId: string, opts: { code?: string 
       add(a);
   }
   const children = new Set(all.filter((a) => a.parentId === actorId).map((a) => a.id));
+  // People who picked me and let me look through their self-checked tasks.
+  const reviewable = new Set(
+    all.filter((a) => a.letFriendsReview === true && accountKeys(a).verifier_key !== null && myKeys.has(accountKeys(a).verifier_key!)).map((a) => a.id),
+  );
 
   for (const t of Object.values(full.tasks)) {
     const k = taskKeys(t);
     if (
       k.owner_id === actorId ||
       children.has(k.owner_id) ||
+      reviewable.has(k.owner_id) ||
       k.created_by === actorId ||
       k.verifier_id === actorId ||
       (k.verifier_key !== null && myKeys.has(k.verifier_key)) ||

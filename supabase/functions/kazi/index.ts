@@ -337,7 +337,7 @@ function activeBlock(a, appId2, now) {
   let best = null;
   if (a.focus && now < a.focus.until && a.focus.apps.includes(appId2)) best = { until: a.focus.until, label: "Focus timer", kind: "focus" };
   for (const b of a.blocks ?? []) {
-    if (!b.apps.includes(appId2)) continue;
+    if (b.limit || !b.apps.includes(appId2)) continue;
     const until = scheduleEndsAt(b, now);
     if (until !== null && (!best || until > best.until)) best = { until, label: b.name, kind: "schedule" };
   }
@@ -769,7 +769,14 @@ function completeWithQuestions(data, taskId, ownerId, answers, now) {
   const t = task(next, taskId);
   if (fallback) t.verify = "questions";
   const qs = questionsFor(t.title);
-  t.lastProof = { at: now, answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2e3) })), photo: true };
+  const proof = {
+    id: newId("p"),
+    at: now,
+    answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2e3) })),
+    photo: true,
+    reward: { ...t.reward }
+  };
+  t.proofs = [proof, ...t.proofs ?? []].slice(0, PROOFS_KEPT);
   award(next, t, null, now);
   return next;
 }
@@ -807,6 +814,46 @@ function applyClaudeVerdict(data, taskId, ownerId, kind, verdict, answers, now) 
     t.submittedAt = null;
     notify(next, ownerId, `Claude asked you to redo \u201C${t.title}\u201D. ${t.redoReason ?? ""}`.trim(), `/task/${t.id}`, now);
   }
+  return next;
+}
+var PROOFS_KEPT = 10;
+var REVIEW_DAYS = 7;
+function canReview(data, reviewerId, ownerId) {
+  const owner = data.accounts[ownerId];
+  const reviewer = data.accounts[reviewerId];
+  if (!owner || !reviewer || reviewerId === ownerId || !owner.letFriendsReview || !owner.verifier) return false;
+  return isContactOf(reviewer, owner.verifier.contact);
+}
+function disallowProof(data, reviewerId, taskId, proofId, reason, now) {
+  const t0 = task(data, taskId);
+  if (!canReview(data, reviewerId, t0.ownerId)) throw new KaziError("You can only review tasks of someone who lets you");
+  const p0 = (t0.proofs ?? []).find((p2) => p2.id === proofId);
+  if (!p0) throw new KaziError("That proof isn\u2019t there any more");
+  if (p0.disallowed) throw new KaziError("Already disallowed");
+  if (now - p0.at > REVIEW_DAYS * DAY) throw new KaziError(`Self-checks can only be disallowed for ${REVIEW_DAYS} days`);
+  const next = clone(data);
+  const t = task(next, taskId);
+  const p = t.proofs.find((x) => x.id === proofId);
+  const reviewer = account(next, reviewerId);
+  const owner = account(next, t.ownerId);
+  const why = reason.trim().slice(0, 200);
+  p.disallowed = { by: reviewerId, at: now, reason: why };
+  if (p.reward.kind === "scrolls") {
+    const taken = Math.min(owner.scrolls, p.reward.amount);
+    owner.scrolls -= taken;
+    pushLedger(owner, { at: now, label: `Disallowed by ${reviewer.name}: ${t.title}`, amount: -taken, unit: "scrolls" });
+  } else {
+    const taken = Math.min(owner.screenSeconds, p.reward.amount * 60);
+    owner.screenSeconds -= taken;
+    pushLedger(owner, { at: now, label: `Disallowed by ${reviewer.name}: ${t.title}`, amount: -Math.round(taken / 60), unit: "minutes" });
+  }
+  const i = t.completions.lastIndexOf(p.at);
+  if (i >= 0) t.completions.splice(i, 1);
+  if (t.status === "done" && t.completedAt === p.at) {
+    t.status = "redo";
+    t.redoReason = why || `${reviewer.name} disallowed your self-check`;
+  }
+  notify(next, owner.id, `${reviewer.name} disallowed your self-check of \u201C${t.title}\u201D.${why ? ` ${why.replace(/\.?$/, ".")}` : ""}`, `/task/${t.id}`, now);
   return next;
 }
 function approveTask(data, taskId, approverId, now) {
@@ -1005,16 +1052,29 @@ function setBlocks(data, actorId, targetId, blocks, now) {
     if (b.apps.length === 0) throw new KaziError(`Pick at least one app to block for \u201C${b.name}\u201D`);
     if (b.days.length === 0) throw new KaziError(`Pick at least one day for \u201C${b.name}\u201D`);
     if (b.start === b.end) throw new KaziError("The start and end time must be different");
+    if (b.limit) {
+      const max = b.limit.kind === "scrolls" ? 1e3 : 600;
+      if (!Number.isInteger(b.limit.amount) || b.limit.amount < 1 || b.limit.amount > max) {
+        throw new KaziError(`A limit is between 1 and ${max} ${b.limit.kind === "scrolls" ? "scrolls" : "minutes"}`);
+      }
+    }
   }
   if (!byParent) {
     for (const old of activeSchedules(target, now)) {
       const kept = blocks.find((b) => b.id === old.id);
-      const same2 = kept && kept.start === old.start && kept.end === old.end && old.days.every((d) => kept.days.includes(d)) && old.apps.every((x) => kept.apps.includes(x));
+      const limitOk = !kept?.limit || !!old.limit && kept.limit.kind === old.limit.kind && kept.limit.amount <= old.limit.amount;
+      const same2 = kept && kept.start === old.start && kept.end === old.end && limitOk && old.days.every((d) => kept.days.includes(d)) && old.apps.every((x) => kept.apps.includes(x));
       if (!same2) throw new KaziError(`\u201C${old.name}\u201D is on right now. You can change it once it ends.`);
     }
   }
   const next = clone(data);
-  account(next, targetId).blocks = blocks.map((b) => ({ ...b, name: b.name.trim(), apps: [...new Set(b.apps)], days: [...new Set(b.days)].sort() }));
+  account(next, targetId).blocks = blocks.map((b) => ({
+    ...b,
+    name: b.name.trim(),
+    apps: [...new Set(b.apps)],
+    days: [...new Set(b.days)].sort(),
+    ...b.limit ? { limit: { kind: b.limit.kind, amount: b.limit.amount } } : {}
+  }));
   if (byParent) notify(next, targetId, `${account(next, actorId).name} updated your blocked times`, "/child", now);
   return next;
 }
@@ -1221,6 +1281,12 @@ function phoneApps(v) {
   );
 }
 var REWARD_KINDS = ["scrolls", "minutes"];
+var LOCK_BACKGROUNDS = ["plain", "mint", "sunrise", "ocean", "night", "forest", "photo"];
+function limitOf(v) {
+  const o = v;
+  if (!o || typeof o !== "object") bad();
+  return { kind: oneOf(o.kind, REWARD_KINDS), amount: int(o.amount) };
+}
 var REPEATS = ["never", "daily", "weekdays"];
 var VERIFY = ["photo", "questions", "claude"];
 function oneOf(v, options) {
@@ -1308,6 +1374,15 @@ function updateProfile(data, actor, args) {
         out.username = u;
         break;
       }
+      case "lockBackground": {
+        const v = str(value, 20);
+        if (!LOCK_BACKGROUNDS.includes(v)) bad();
+        out.lockBackground = v;
+        break;
+      }
+      case "letFriendsReview":
+        out.letFriendsReview = bool(value);
+        break;
       case "lockMessages": {
         if (!Array.isArray(value) || value.length > 20) bad();
         const list = value.map((m) => str(m, 120).replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -1386,11 +1461,13 @@ var ACTIONS = {
           const n = int(dd);
           if (n < 0 || n > 6) bad();
           return n;
-        })
+        }),
+        ...o.limit === void 0 || o.limit === null ? {} : { limit: limitOf(o.limit) }
       };
     });
     return setBlocks(d, actor, a.childId === void 0 ? actor : id(a.childId), blocks, now);
   },
+  disallowProof: (d, actor, a, now) => disallowProof(d, actor, id(a.taskId), id(a.proofId), a.reason === void 0 ? "" : str(a.reason, 200), now),
   startFocus: (d, actor, a, now) => {
     if (!Array.isArray(a.apps) || a.apps.length > MAX_LOCKED_APPS) bad();
     return startFocus(d, actor, a.childId === void 0 ? actor : id(a.childId), [...new Set(a.apps.map(appId))], int(a.minutes), now);
@@ -1478,7 +1555,7 @@ function viewFor(data, meId) {
   for (const t of Object.values(data.tasks)) {
     const mine = t.ownerId === meId || t.createdBy === meId;
     const mineToCheck = canApprove(data, t, meId) || t.approvedBy === meId;
-    if (mine || mineToCheck || childIds.has(t.ownerId)) tasks[t.id] = t;
+    if (mine || mineToCheck || childIds.has(t.ownerId) || canReview(data, meId, t.ownerId)) tasks[t.id] = t;
   }
   const accounts = { [meId]: privateAccount(me2) };
   for (const c of children) accounts[c.id] = privateAccount(c);
@@ -1950,7 +2027,7 @@ function createCore(options) {
     const { data } = await repo2.load(me2);
     const task2 = data.tasks[taskId];
     const parentOfOwner = data.accounts[task2?.ownerId ?? ""]?.parentId === me2;
-    if (!task2 || !(task2.ownerId === me2 || parentOfOwner || canApprove(data, task2, me2))) throw new HttpError(404, "Photo not found");
+    if (!task2 || !(task2.ownerId === me2 || parentOfOwner || canApprove(data, task2, me2) || canReview(data, me2, task2.ownerId))) throw new HttpError(404, "Photo not found");
     const bytes = await repo2.getPhoto(taskId);
     const type = bytes && photoType(bytes);
     if (!bytes || !type) throw new HttpError(404, "Photo not found");

@@ -8,7 +8,7 @@ import com.getcapacitor.PluginHandle;
 public class MainActivity extends BridgeActivity {
 
     static final String EXTRA_LOCKED_APP = "app.kazikwanza.LOCKED_APP";
-    /** For YouTube: which part was locked, "scrolls" (Shorts) or "minutes" (videos). */
+    /** Why it was locked: for YouTube "scrolls" (Shorts) or "minutes" (videos); or "blocked" or "limit". */
     static final String EXTRA_LOCKED_KIND = "app.kazikwanza.LOCKED_KIND";
 
     @Override

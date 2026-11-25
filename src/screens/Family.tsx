@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import QRCode from 'qrcode';
 import { ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
 import { Avatar, BackButton, HeaderActions, NavScreen, Sheet, StoredPhoto, useBack } from '../components/ui';
 import { appFor, lockedAppsOf, usesMinutes } from '../lib/apps';
 import { AppList } from '../components/AppList';
+import { FocusTimerCard, RestrictionsCard } from './Controls';
 import {
   LINK_CODE_TTL_MS,
   activeLinkCode,
@@ -211,20 +211,12 @@ export function LinkChild() {
   const now = useNow(1000);
   const navigate = useNavigate();
   const code = activeLinkCode(data, me.id, now);
-  const [qr, setQr] = useState('');
   const startKids = useRef(childrenOf(data, me.id).length);
   const kids = childrenOf(data, me.id);
 
   useEffect(() => {
     if (!code) void act('createLinkCode');
   }, [code, me.id]);
-
-  useEffect(() => {
-    if (!code) return;
-    QRCode.toString(`KAZIKWANZA:${code.code}`, { type: 'svg', margin: 0, color: { dark: '#166534', light: '#ffffff' } })
-      .then(setQr)
-      .catch(() => setQr(''));
-  }, [code?.code]);
 
   useEffect(() => {
     if (kids.length > startKids.current) {
@@ -273,12 +265,6 @@ export function LinkChild() {
       <span className="muted" style={{ fontSize: 14, textAlign: 'center' }}>
         Code expires in {minutesLeft} minute{minutesLeft === 1 ? '' : 's'}
       </span>
-      <div className="stack-10 center" style={{ alignSelf: 'center' }}>
-        <div className="qr" dangerouslySetInnerHTML={{ __html: qr }} aria-label="QR code with the family code" role="img" />
-        <span className="muted" style={{ fontSize: 14 }}>
-          Or scan this with their phone
-        </span>
-      </div>
       <div className="spacer" />
       <button className="btn btn-primary" onClick={share}>
         Share code
@@ -750,74 +736,9 @@ export function ChildRules() {
 
 /* ───────── Child side ───────── */
 
-type Detector = { detect: (src: CanvasImageSource) => Promise<{ rawValue: string }[]> };
-type DetectorCtor = new (opts: { formats: string[] }) => Detector;
-
-function QrScanner({ onCode, onClose }: { onCode: (code: string) => void; onClose: () => void }) {
-  const video = useRef<HTMLVideoElement>(null);
-  const [error, setError] = useState('');
-  const onCodeRef = useRef(onCode);
-  onCodeRef.current = onCode;
-
-  useEffect(() => {
-    const Ctor = (window as unknown as { BarcodeDetector?: DetectorCtor }).BarcodeDetector;
-    if (!Ctor || !navigator.mediaDevices?.getUserMedia) {
-      setError('This browser can’t scan QR codes. Type the code instead.');
-      return;
-    }
-    let stream: MediaStream | null = null;
-    let timer = 0;
-    let stopped = false;
-    const detector = new Ctor({ formats: ['qr_code'] });
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment' } })
-      .then((s) => {
-        if (stopped) {
-          s.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        stream = s;
-        if (video.current) {
-          video.current.srcObject = s;
-          void video.current.play();
-        }
-        timer = window.setInterval(async () => {
-          if (!video.current || video.current.readyState < 2) return;
-          try {
-            const found = await detector.detect(video.current);
-            const match = found.map((f) => /^KAZIKWANZA:([A-Z0-9]{6})$/.exec(f.rawValue)).find(Boolean);
-            if (match) onCodeRef.current(match[1]);
-          } catch {
-            /* keep trying */
-          }
-        }, 400);
-      })
-      .catch(() => setError('Camera access was blocked. Type the code instead.'));
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  return (
-    <Sheet open onClose={onClose} title="Scan your parent's code">
-      {error ? (
-        <p className="lead">{error}</p>
-      ) : (
-        <video ref={video} playsInline muted style={{ width: '100%', borderRadius: 16, background: '#000', aspectRatio: '1', objectFit: 'cover' }} />
-      )}
-      <button className="btn btn-secondary" onClick={onClose}>
-        Close
-      </button>
-    </Sheet>
-  );
-}
-
 export function JoinFamily() {
   const navigate = useNavigate();
   const [code, setCode] = useState('');
-  const [scan, setScan] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function join(value = code) {
@@ -855,23 +776,10 @@ export function JoinFamily() {
           onKeyDown={(e) => e.key === 'Enter' && code.length === 6 && join()}
         />
       </div>
-      <button type="button" className="link-btn strong" style={{ alignSelf: 'center' }} onClick={() => setScan(true)}>
-        Scan QR code instead
-      </button>
       <div className="spacer" />
       <button className="btn btn-primary" disabled={code.length !== 6} onClick={() => join()}>
         Join
       </button>
-      {scan && (
-        <QrScanner
-          onClose={() => setScan(false)}
-          onCode={(c) => {
-            setScan(false);
-            setCode(c);
-            join(c);
-          }}
-        />
-      )}
     </main>
   );
 }
@@ -924,6 +832,8 @@ export function ChildHome() {
         <span style={{ flexGrow: 1 }}>Open your apps</span>
         <ChevronIcon size={18} color="#52525B" />
       </Link>
+      <FocusTimerCard owner={me} />
+      <RestrictionsCard owner={me} />
       <div className="stack">
         <h2 className="h2" style={{ marginBottom: 4 }}>
           From {parent?.name ?? 'your parent'}

@@ -4,7 +4,7 @@
  * connected to (with private fields removed), and the tasks, messages and
  * notifications that involve them.
  */
-import { approverFor, canApprove, childrenOf, contactsOf, isContactOf } from './logic';
+import { approverFor, canApprove, canReview, childrenOf, contactsOf, isContactOf } from './logic';
 import type { Account, AppData } from './types';
 
 /**
@@ -49,7 +49,7 @@ export function viewFor(data: AppData, meId: string): AppData {
   for (const t of Object.values(data.tasks)) {
     const mine = t.ownerId === meId || t.createdBy === meId;
     const mineToCheck = canApprove(data, t, meId) || t.approvedBy === meId;
-    if (mine || mineToCheck || childIds.has(t.ownerId)) tasks[t.id] = t;
+    if (mine || mineToCheck || childIds.has(t.ownerId) || canReview(data, meId, t.ownerId)) tasks[t.id] = t;
   }
 
   const accounts: AppData['accounts'] = { [meId]: privateAccount(me) };

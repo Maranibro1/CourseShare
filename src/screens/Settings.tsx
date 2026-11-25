@@ -144,8 +144,26 @@ export function Profile() {
           <span>Lock screen messages</span>
           <span className="value">{me.lockMessages?.length ? `${me.lockMessages.length} chosen` : 'Pick some'}</span>
         </Link>
+        <Link to="/history" className="row row-btn">
+          <span>My task history</span>
+          <ChevronIcon size={18} color="#52525B" />
+        </Link>
+        {me.verifier && !me.parentId && (
+          <div className="row">
+            <span>Let {verifierName} review my self-checked tasks</span>
+            <Toggle
+              on={!!me.letFriendsReview}
+              label="Let my verifier review my self-checked tasks"
+              onChange={(on) => void act('updateProfile', { patch: { letFriendsReview: on } })}
+            />
+          </div>
+        )}
+        <Link to="/settings/background" className="row row-btn">
+          <span>Lock screen background</span>
+          <span className="value">{me.lockBackground === 'photo' ? 'Your photo' : (me.lockBackground ?? 'plain').replace(/^./, (c) => c.toUpperCase())}</span>
+        </Link>
         <Link to="/settings/blocks" className="row row-btn">
-          <span>Blocked times and focus timer</span>
+          <span>Restrictions and focus timer</span>
           <span className="value">{me.blocks?.length ? `${me.blocks.length} set` : 'None'}</span>
         </Link>
         <div className="row">

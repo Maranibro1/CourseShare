@@ -9,7 +9,6 @@ test('parent links a child, sets a task and approves the photo', async ({ page }
   const codeEl = page.getByTestId('link-code');
   await expect(codeEl).toHaveAttribute('data-code', /^[A-Z0-9]{6}$/);
   const code = (await codeEl.getAttribute('data-code'))!;
-  await expect(page.getByRole('img', { name: 'QR code with the family code' }).locator('svg')).toBeVisible();
   await signOut(page);
 
   await signUp(page, 'Leo', 'leo@example.com');

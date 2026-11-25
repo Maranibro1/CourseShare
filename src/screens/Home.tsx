@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { CheckIcon, ChevronIcon, GridIcon, PlusIcon } from '../components/Icons';
 import { HeaderActions, NavScreen } from '../components/ui';
+import { FocusTimerCard, RestrictionsCard } from './Controls';
 import { lockedNames } from '../lib/apps';
 import { approverName, freeUnlockActive, minutesLeft, rewardLabel, todaysTasks } from '../lib/logic';
 import { useAccount, useData, useNow } from '../lib/store';
@@ -132,6 +133,9 @@ export function Home() {
         <span style={{ flexGrow: 1 }}>Open your apps</span>
         <ChevronIcon size={18} color="#52525B" />
       </Link>
+
+      <FocusTimerCard owner={me} />
+      <RestrictionsCard owner={me} />
 
       <div className="stack-4">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingBottom: 8 }}>

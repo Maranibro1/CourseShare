@@ -164,7 +164,7 @@ describe('focus timers', () => {
     data = applyAction(data, sam, 'setBlocks', { blocks: [bedtime({ apps: ['youtube'] })] }, T0).data;
     const rules = nativeRules(data.accounts[sam], 'p');
     expect(rules.focus).toEqual({ until: T0 + 30 * 60_000, apps: [{ id: 'tiktok', packages: ['com.zhiliaoapp.musically', 'com.ss.android.ugc.trill'] }] });
-    expect(rules.blocks).toEqual([{ start: '21:00', end: '07:00', days: [0, 1, 2, 3, 4], apps: [{ id: 'youtube', packages: ['com.google.android.youtube'] }] }]);
+    expect(rules.blocks).toEqual([{ id: 'b1', start: '21:00', end: '07:00', days: [0, 1, 2, 3, 4], apps: [{ id: 'youtube', packages: ['com.google.android.youtube'] }] }]);
   });
 });
 
@@ -173,14 +173,92 @@ describe('questions with a photo', () => {
     let { data, sam } = two();
     const t = addTask(data, sam, { title: 'Read 20 pages', rewardKind: 'scrolls', amount: 20, verify: 'questions', repeat: 'never' }, T0);
     data = completeWithQuestions(t.data, t.id, sam, [' Atomic Habits ', 'Small habits add up', 'Make it easy'], T0);
-    expect(data.tasks[t.id].lastProof).toEqual({
+    expect(data.tasks[t.id].proofs).toEqual([
+      expect.objectContaining({
       at: T0,
       photo: true,
+      reward: { kind: 'scrolls', amount: 20 },
       answers: [
         { q: 'What did you read? Name the book, chapter or article.', a: 'Atomic Habits' },
         { q: 'What was the main idea of what you read?', a: 'Small habits add up' },
         { q: 'Write one thing you learned or want to remember.', a: 'Make it easy' },
       ],
-    });
+      }),
+    ]);
+  });
+});
+
+describe('friends reviewing self-checks', () => {
+  function reviewed() {
+    let { data, sam, emma } = two();
+    data = applyAction(data, sam, 'updateProfile', { patch: { verifier: { contact: '@emma', relation: 'Friend' } } }, T0).data;
+    const t = addTask(data, sam, { title: 'Read 20 pages', rewardKind: 'scrolls', amount: 20, verify: 'questions', repeat: 'never' }, T0);
+    data = completeWithQuestions(t.data, t.id, sam, ['Atomic Habits', 'Small habits add up', 'Make it easy'], T0);
+    return { data, sam, emma, taskId: t.id, proofId: data.tasks[t.id].proofs![0].id };
+  }
+
+  it('only when the person turns it on, and only by the one who checks their work', () => {
+    let { data, sam, emma, taskId, proofId } = reviewed();
+    expect(() => applyAction(data, emma, 'disallowProof', { taskId, proofId }, T0)).toThrow(/lets you/);
+    data = applyAction(data, sam, 'updateProfile', { patch: { letFriendsReview: true } }, T0).data;
+    const stranger = createAccount(data, { name: 'X', email: 'x@example.com', passwordHash: 'h' }, T0);
+    expect(() => applyAction(stranger.data, stranger.id, 'disallowProof', { taskId, proofId }, T0)).toThrow(/lets you/);
+    expect(() => applyAction(data, sam, 'disallowProof', { taskId, proofId }, T0)).toThrow(/lets you/);
+    expect(applyAction(data, emma, 'disallowProof', { taskId, proofId }, T0).data.tasks[taskId].proofs![0].disallowed?.by).toBe(emma);
+  });
+
+  it('take the reward back, send the task back and tell them why', () => {
+    let { data, sam, emma, taskId, proofId } = reviewed();
+    data = applyAction(data, sam, 'updateProfile', { patch: { letFriendsReview: true } }, T0).data;
+    expect(data.accounts[sam].scrolls).toBe(70);
+    data = applyAction(data, emma, 'disallowProof', { taskId, proofId, reason: 'That photo is from last week' }, T0 + 60_000).data;
+    expect(data.accounts[sam].scrolls).toBe(50);
+    expect(data.accounts[sam].ledger[0]).toMatchObject({ label: 'Disallowed by Emma: Read 20 pages', amount: -20 });
+    expect(data.tasks[taskId]).toMatchObject({ status: 'redo', redoReason: 'That photo is from last week', completions: [] });
+    expect(data.notifications.some((n) => n.accountId === sam && n.text.includes('Emma disallowed your self-check'))).toBe(true);
+    expect(() => applyAction(data, emma, 'disallowProof', { taskId, proofId }, T0)).toThrow(/Already/);
+  });
+
+  it('only within a week', () => {
+    let { data, sam, emma, taskId, proofId } = reviewed();
+    data = applyAction(data, sam, 'updateProfile', { patch: { letFriendsReview: true } }, T0).data;
+    expect(() => applyAction(data, emma, 'disallowProof', { taskId, proofId }, T0 + 8 * 24 * 3600_000)).toThrow(/7 days/);
+  });
+});
+
+describe('limits in restriction windows', () => {
+  const afterSchool = (patch: Partial<BlockSchedule> = {}): BlockSchedule =>
+    bedtime({ id: 'w2', name: 'After school', start: '15:00', end: '18:00', days: [0, 1, 2, 3, 4, 5, 6], limit: { kind: 'minutes', amount: 30 }, ...patch });
+
+  it('don’t shut the app until the phone says the limit is used up', () => {
+    let { data, sam } = two();
+    data = applyAction(data, sam, 'setBlocks', { blocks: [afterSchool()] }, at(12)).data;
+    expect(accessFor(data.accounts[sam], 'tiktok', at(16))).toBe('balance');
+    expect(nativeRules(data.accounts[sam], 'p').blocks[0]).toMatchObject({ id: 'w2', limit: { kind: 'minutes', amount: 30 } });
+  });
+
+  it('can only get stricter while on', () => {
+    let { data, sam } = two();
+    data = applyAction(data, sam, 'setBlocks', { blocks: [afterSchool()] }, at(12)).data;
+    expect(() => applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: { kind: 'minutes', amount: 60 } })] }, at(16))).toThrow(/on right now/);
+    expect(() => applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: { kind: 'scrolls', amount: 10 } })] }, at(16))).toThrow(/on right now/);
+    expect(applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: { kind: 'minutes', amount: 10 } })] }, at(16)).data.accounts[sam].blocks![0].limit?.amount).toBe(10);
+    // A full block is stricter than any limit.
+    expect(applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: undefined })] }, at(16)).data.accounts[sam].blocks![0].limit).toBeUndefined();
+  });
+
+  it('are validated', () => {
+    const { data, sam } = two();
+    expect(() => applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: { kind: 'minutes', amount: 0 } })] }, at(12))).toThrow(/between 1 and 600/);
+    expect(() => applyAction(data, sam, 'setBlocks', { blocks: [afterSchool({ limit: { kind: 'scrolls', amount: 5000 } })] }, at(12))).toThrow(/between 1 and 1000/);
+  });
+});
+
+describe('lock screen background', () => {
+  it('is a preset name or "photo"', () => {
+    const { data, sam } = two();
+    expect(applyAction(data, sam, 'updateProfile', { patch: { lockBackground: 'ocean' } }, T0).data.accounts[sam].lockBackground).toBe('ocean');
+    expect(applyAction(data, sam, 'updateProfile', { patch: { lockBackground: 'photo' } }, T0).data.accounts[sam].lockBackground).toBe('photo');
+    expect(() => applyAction(data, sam, 'updateProfile', { patch: { lockBackground: 'url(evil)' } }, T0)).toThrow();
   });
 });

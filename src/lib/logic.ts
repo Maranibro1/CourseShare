@@ -17,6 +17,7 @@ import type {
   Task,
   VerifyMethod,
   BlockSchedule,
+  Proof,
 } from './types';
 
 export const EMERGENCY_PER_WEEK = 3;
@@ -594,7 +595,14 @@ export function completeWithQuestions(data: AppData, taskId: string, ownerId: st
   if (fallback) t.verify = 'questions';
   // Keep what they said they did, with the photo they took, so it can be looked back at.
   const qs = questionsFor(t.title);
-  t.lastProof = { at: now, answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2000) })), photo: true };
+  const proof: Proof = {
+    id: newId('p'),
+    at: now,
+    answers: answers.map((a, i) => ({ q: qs[i] ?? `Question ${i + 1}`, a: a.trim().slice(0, 2000) })),
+    photo: true,
+    reward: { ...t.reward },
+  };
+  t.proofs = [proof, ...(t.proofs ?? [])].slice(0, PROOFS_KEPT);
   award(next, t, null, now);
   return next;
 }
@@ -654,6 +662,67 @@ export function applyClaudeVerdict(
     t.submittedAt = null;
     notify(next, ownerId, `Claude asked you to redo “${t.title}”. ${t.redoReason ?? ''}`.trim(), `/task/${t.id}`, now);
   }
+  return next;
+}
+
+/* ───────── Reviewing self-checked tasks ───────── */
+
+export const PROOFS_KEPT = 10;
+/** How long after a self-check it can still be disallowed. */
+export const REVIEW_DAYS = 7;
+
+/** True when `reviewerId` checks `owner`'s work and the owner lets them look through their self-checked tasks. */
+export function canReview(data: AppData, reviewerId: string, ownerId: string): boolean {
+  const owner = data.accounts[ownerId];
+  const reviewer = data.accounts[reviewerId];
+  if (!owner || !reviewer || reviewerId === ownerId || !owner.letFriendsReview || !owner.verifier) return false;
+  return isContactOf(reviewer, owner.verifier.contact);
+}
+
+/** Everything someone checked by themselves, newest first: for their own history, or for a friend reviewing it. */
+export function selfCheckedHistory(data: AppData, ownerId: string): { task: Task; proof: Proof }[] {
+  return Object.values(data.tasks)
+    .filter((t) => t.ownerId === ownerId)
+    .flatMap((task) => (task.proofs ?? []).map((proof) => ({ task, proof })))
+    .sort((a, b) => b.proof.at - a.proof.at);
+}
+
+/**
+ * The person who checks someone's work says a self-check doesn't hold up:
+ * the reward is taken back, and the owner is told why.
+ */
+export function disallowProof(data: AppData, reviewerId: string, taskId: string, proofId: string, reason: string, now: number): AppData {
+  const t0 = task(data, taskId);
+  if (!canReview(data, reviewerId, t0.ownerId)) throw new KaziError('You can only review tasks of someone who lets you');
+  const p0 = (t0.proofs ?? []).find((p) => p.id === proofId);
+  if (!p0) throw new KaziError('That proof isn’t there any more');
+  if (p0.disallowed) throw new KaziError('Already disallowed');
+  if (now - p0.at > REVIEW_DAYS * DAY) throw new KaziError(`Self-checks can only be disallowed for ${REVIEW_DAYS} days`);
+  const next = clone(data);
+  const t = task(next, taskId);
+  const p = t.proofs!.find((x) => x.id === proofId)!;
+  const reviewer = account(next, reviewerId);
+  const owner = account(next, t.ownerId);
+  const why = reason.trim().slice(0, 200);
+  p.disallowed = { by: reviewerId, at: now, reason: why };
+  // Take back exactly what it paid, as far as the balance allows.
+  if (p.reward.kind === 'scrolls') {
+    const taken = Math.min(owner.scrolls, p.reward.amount);
+    owner.scrolls -= taken;
+    pushLedger(owner, { at: now, label: `Disallowed by ${reviewer.name}: ${t.title}`, amount: -taken, unit: 'scrolls' });
+  } else {
+    const taken = Math.min(owner.screenSeconds, p.reward.amount * 60);
+    owner.screenSeconds -= taken;
+    pushLedger(owner, { at: now, label: `Disallowed by ${reviewer.name}: ${t.title}`, amount: -Math.round(taken / 60), unit: 'minutes' });
+  }
+  const i = t.completions.lastIndexOf(p.at);
+  if (i >= 0) t.completions.splice(i, 1);
+  // If it was today's run of the task, it's back to do again.
+  if (t.status === 'done' && t.completedAt === p.at) {
+    t.status = 'redo';
+    t.redoReason = why || `${reviewer.name} disallowed your self-check`;
+  }
+  notify(next, owner.id, `${reviewer.name} disallowed your self-check of “${t.title}”.${why ? ` ${why.replace(/\.?$/, '.')}` : ''}`, `/task/${t.id}`, now);
   return next;
 }
 
@@ -999,16 +1068,36 @@ export function setBlocks(data: AppData, actorId: string, targetId: string, bloc
     if (b.apps.length === 0) throw new KaziError(`Pick at least one app to block for “${b.name}”`);
     if (b.days.length === 0) throw new KaziError(`Pick at least one day for “${b.name}”`);
     if (b.start === b.end) throw new KaziError('The start and end time must be different');
+    if (b.limit) {
+      const max = b.limit.kind === 'scrolls' ? 1000 : 600;
+      if (!Number.isInteger(b.limit.amount) || b.limit.amount < 1 || b.limit.amount > max) {
+        throw new KaziError(`A limit is between 1 and ${max} ${b.limit.kind === 'scrolls' ? 'scrolls' : 'minutes'}`);
+      }
+    }
   }
   if (!byParent) {
     for (const old of activeSchedules(target, now)) {
       const kept = blocks.find((b) => b.id === old.id);
-      const same = kept && kept.start === old.start && kept.end === old.end && old.days.every((d) => kept.days.includes(d)) && old.apps.every((x) => kept.apps.includes(x));
+      // A limit may get stricter (smaller, or a full block), never looser.
+      const limitOk = !kept?.limit || (!!old.limit && kept.limit.kind === old.limit.kind && kept.limit.amount <= old.limit.amount);
+      const same =
+        kept &&
+        kept.start === old.start &&
+        kept.end === old.end &&
+        limitOk &&
+        old.days.every((d) => kept.days.includes(d)) &&
+        old.apps.every((x) => kept.apps.includes(x));
       if (!same) throw new KaziError(`“${old.name}” is on right now. You can change it once it ends.`);
     }
   }
   const next = clone(data);
-  account(next, targetId).blocks = blocks.map((b) => ({ ...b, name: b.name.trim(), apps: [...new Set(b.apps)], days: [...new Set(b.days)].sort() }));
+  account(next, targetId).blocks = blocks.map((b) => ({
+    ...b,
+    name: b.name.trim(),
+    apps: [...new Set(b.apps)],
+    days: [...new Set(b.days)].sort(),
+    ...(b.limit ? { limit: { kind: b.limit.kind, amount: b.limit.amount } } : {}),
+  }));
   if (byParent) notify(next, targetId, `${account(next, actorId).name} updated your blocked times`, '/child', now);
   return next;
 }
@@ -1101,7 +1190,7 @@ export interface NativeRules {
   enabled: boolean;
   apps: { id: string; name: string; kind: LockableApp['kind']; packages: string[] }[];
   /** Daily windows when these apps can't be opened at all. Days: 0 = Sunday. */
-  blocks: { start: string; end: string; days: number[]; apps: { id: string; packages: string[] }[] }[];
+  blocks: { id: string; start: string; end: string; days: number[]; apps: { id: string; packages: string[] }[]; limit?: { kind: RewardKind; amount: number } }[];
   /** A focus timer: these apps stay shut until `until` (ms since 1970). */
   focus: { until: number; apps: { id: string; packages: string[] }[] } | null;
   scrolls: number;
@@ -1122,7 +1211,14 @@ export function nativeRules(a: Account, deviceId: string): NativeRules {
   return {
     enabled: a.onboarded && (a.lockedApps.length > 0 || (a.blocks?.length ?? 0) > 0 || !!a.focus),
     apps: lockedAppsOf(a).map(({ id, name, kind, packages }) => ({ id, name, kind, packages })),
-    blocks: (a.blocks ?? []).map((b) => ({ start: b.start, end: b.end, days: b.days, apps: packagesOf(a, b.apps) })),
+    blocks: (a.blocks ?? []).map((b) => ({
+      id: b.id,
+      start: b.start,
+      end: b.end,
+      days: b.days,
+      apps: packagesOf(a, b.apps),
+      ...(b.limit ? { limit: b.limit } : {}),
+    })),
     focus: a.focus ? { until: a.focus.until, apps: packagesOf(a, a.focus.apps) } : null,
     scrolls: a.scrolls,
     screenSeconds: a.screenSeconds,

@@ -183,7 +183,7 @@ export function useNativeBridge() {
     const handles: Promise<PluginListenerHandle>[] = [];
     handles.push(KaziLock.addListener('locked', ({ appId, kind }) => {
       void pumpNative();
-      const part = kind === 'scrolls' || kind === 'minutes' ? `?part=${kind}` : '';
+      const part = kind === 'scrolls' || kind === 'minutes' || kind === 'limit' ? `?part=${kind}` : '';
       navigate(`/locked/${appId}${part}`);
     }));
     handles.push(CapApp.addListener('resume', () => {

@@ -269,3 +269,59 @@ test('pick a verifier by @username, and sign in with a username', async ({ brows
   await signIn(again, emmaName.slice(1));
   await expect(again.getByRole('heading', { name: 'Today' })).toBeVisible();
 });
+
+test('a friend reviews a self-checked task and disallows it', async ({ browser }) => {
+  const id = Date.now();
+  const emma = await phone(browser);
+  await signUp(emma, 'Emma', `emma.r${id}@example.com`);
+  await onboardPersonal(emma, null);
+  await emma.getByRole('link', { name: 'Verify', exact: true }).click();
+  const emmaName = (await emma.getByTestId('my-username').textContent())!.trim();
+
+  const sam = await phone(browser);
+  await signUp(sam, 'Sam', `sam.r${id}@example.com`);
+  await onboardPersonal(sam, null);
+  await sam.getByRole('link', { name: 'Verify', exact: true }).click();
+  await sam.getByLabel("Verifier's username").fill(emmaName);
+  await sam.getByRole('button', { name: 'Ask' }).click();
+  // Sam lets Emma review his self-checked tasks.
+  await sam.goto('/#/profile');
+  await sam.getByRole('button', { name: 'Let my verifier review my self-checked tasks' }).click();
+
+  // Sam checks a task himself, with a photo and answers.
+  await sam.goto('/#/home');
+  await sam.getByRole('link', { name: 'Add task' }).click();
+  await sam.getByLabel('Task', { exact: true }).fill('Read 20 pages');
+  await sam.getByRole('button', { name: '50', exact: true }).click();
+  await sam.getByText(/^Answer a few questions/).click();
+  await sam.getByRole('button', { name: 'Add task' }).click();
+  await sam.getByRole('link', { name: /Read 20 pages/ }).click();
+  await sam.getByRole('link', { name: "I'm done, verify it" }).click();
+  await proofPhoto(sam);
+  for (const [i, t] of ['Atomic Habits, chapter two', 'Small daily habits add up over time.', 'Make good habits obvious and easy.'].entries()) {
+    await sam.getByLabel('Your answer').fill(t);
+    if (i < 2) await sam.getByRole('button', { name: 'Next' }).click();
+  }
+  await sam.getByText('I honestly completed this task').click();
+  await sam.getByRole('button', { name: 'Finish' }).click();
+  await expect(sam.getByText('+50')).toBeVisible();
+  await sam.getByRole('button', { name: 'Done' }).click();
+  await expect(sam.getByTestId('scroll-balance')).toHaveText('50');
+
+  // Emma opens Sam's task history from "People I verify for" and disallows it.
+  await emma.goto('/#/requests');
+  await emma.reload();
+  await emma.getByRole('link', { name: "Sam's task history" }).click();
+  await expect(emma.getByText('Atomic Habits, chapter two')).toBeVisible();
+  await expect(emma.getByRole('img', { name: 'Photo of Read 20 pages' })).toBeVisible();
+  await emma.getByRole('button', { name: 'Disallow' }).click();
+  await emma.getByLabel('Why').fill('Show me the page you got to');
+  await emma.getByRole('button', { name: 'Disallow' }).last().click();
+  await expect(emma.getByText('Disallowed', { exact: true })).toBeVisible();
+
+  // Sam loses the 50 scrolls and sees why.
+  await sam.reload();
+  await expect(sam.getByTestId('scroll-balance')).toHaveText('0');
+  await sam.goto('/#/history');
+  await expect(sam.getByText(/disallowed this: Show me the page you got to/)).toBeVisible();
+});

@@ -146,6 +146,33 @@ public class LockServiceTest {
     /* ───────── Scrolling apps ───────── */
 
     @Test
+    public void watchingAVideoCostsNothingOnlySwipesDo() throws Exception {
+        rules(10, 0, "");
+        open(TIKTOK);
+        SystemClock.sleep(8_000);
+        assertEquals("watching for 8 seconds is free", 10, store.scrollsLeft());
+        swipeUp();
+        assertEquals("one swipe is one scroll", 9, store.scrollsLeft());
+        SystemClock.sleep(6_000);
+        assertEquals(9, store.scrollsLeft());
+    }
+
+    @Test
+    public void quickSwipesEachCostOneScroll() throws Exception {
+        rules(10, 0, "");
+        open(TIKTOK);
+        int w = device.getDisplayWidth();
+        int h = device.getDisplayHeight();
+        for (int i = 0; i < 3; i++) {
+            device.swipe(w / 2, (int) (h * 0.75), w / 2, (int) (h * 0.30), 15);
+            // About as quick as people flick through videos, but past the end of the last swipe.
+            SystemClock.sleep(1_300);
+        }
+        SystemClock.sleep(1_000);
+        assertEquals(7, store.scrollsLeft());
+    }
+
+    @Test
     public void tiktokSpendsOneScrollPerSwipe() throws Exception {
         rules(10, 0, "");
         open(TIKTOK);
@@ -395,6 +422,25 @@ public class LockServiceTest {
         Intent intent = context.getPackageManager().getLaunchIntentForPackage(MINECRAFT);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         context.startActivity(intent);
+        assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
+    }
+
+    @Test
+    public void aSwipeLimitShutsAnAppAfterThatManySwipes() throws Exception {
+        // X isn't locked; for this window it may be swiped twice in total.
+        JSONObject window = new JSONObject()
+            .put("id", "w1")
+            .put("start", "00:00")
+            .put("end", "23:59")
+            .put("days", new JSONArray().put(0).put(1).put(2).put(3).put(4).put(5).put(6))
+            .put("limit", new JSONObject().put("kind", "scrolls").put("amount", 2))
+            .put("apps", appRefs("x", X));
+        rulesWithBlock(new JSONObject().put("blocks", new JSONArray().put(window)));
+        open(X);
+        swipeUp();
+        swipeUp();
+        assertTrue("still in X after 2 swipes", inFront(X, 1_000));
+        swipeUp();
         assertTrue("Kazikwanza's lock screen opened", inFront(SELF, 10_000));
     }
 

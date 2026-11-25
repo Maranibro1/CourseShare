@@ -36,11 +36,28 @@ export function activeBlock(a: Pick<Account, 'blocks' | 'focus'>, appId: string,
   let best: ActiveBlock | null = null;
   if (a.focus && now < a.focus.until && a.focus.apps.includes(appId)) best = { until: a.focus.until, label: 'Focus timer', kind: 'focus' };
   for (const b of a.blocks ?? []) {
-    if (!b.apps.includes(appId)) continue;
+    // Limit windows only shut an app once the limit is used up; the phone counts that.
+    if (b.limit || !b.apps.includes(appId)) continue;
     const until = scheduleEndsAt(b, now);
     if (until !== null && (!best || until > best.until)) best = { until, label: b.name, kind: 'schedule' };
   }
   return best;
+}
+
+/** The limit window covering `appId` right now, if any. */
+export function activeLimit(a: Pick<Account, 'blocks'>, appId: string, now: number): (BlockSchedule & { until: number }) | null {
+  for (const b of a.blocks ?? []) {
+    if (!b.limit || !b.apps.includes(appId)) continue;
+    const until = scheduleEndsAt(b, now);
+    if (until !== null) return { ...b, until };
+  }
+  return null;
+}
+
+/** "Limit: 30 min" / "Limit: 50 scrolls" / "Blocked". */
+export function restrictionLabel(b: Pick<BlockSchedule, 'limit'>): string {
+  if (!b.limit) return 'Blocked completely';
+  return b.limit.kind === 'scrolls' ? `Up to ${b.limit.amount} scrolls` : `Up to ${b.limit.amount} min`;
 }
 
 /** Windows that are on right now; these can't be removed or loosened until they end. */

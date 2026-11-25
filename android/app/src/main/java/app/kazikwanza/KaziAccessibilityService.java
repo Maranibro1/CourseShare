@@ -110,6 +110,9 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     /** The YouTube-style app in front, while it is, and which part of it is on screen. */
     private LockStore.LockedApp mixedApp;
+    /** The app in front while a minutes limit covers it, and since when its time isn't written down. */
+    private String limitPkg;
+    private long limitSince;
     private int part = PART_BROWSE;
     private long partSince;
 
@@ -119,7 +122,7 @@ public class KaziAccessibilityService extends AccessibilityService {
             onTick();
             // onTick may have scheduled the next tick already (a video started); keep just one.
             handler.removeCallbacks(this);
-            if (timingApp != null || mixedApp != null) handler.postDelayed(this, TICK_MS);
+            if (timingApp != null || mixedApp != null || limitPkg != null) handler.postDelayed(this, TICK_MS);
         }
     };
 
@@ -130,6 +133,7 @@ public class KaziAccessibilityService extends AccessibilityService {
                 // Nobody is playing with the screen off; stop the clock.
                 stopTiming();
                 stopWatching();
+                stopLimit();
                 foreground = null;
             } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
                 String pkg = currentPackageFromUsageStats();
@@ -196,6 +200,7 @@ public class KaziAccessibilityService extends AccessibilityService {
         if (pkg.equals(foreground)) return;
         stopTiming();
         stopWatching();
+        stopLimit();
         foreground = pkg;
         foregroundSince = System.currentTimeMillis();
         session = pkg + ":" + foregroundSince;
@@ -204,6 +209,12 @@ public class KaziAccessibilityService extends AccessibilityService {
 
         long now = System.currentTimeMillis();
         if (lockIfBlocked(pkg, now)) return;
+        if (!safePackages.contains(pkg) && store.hasLimit(pkg, LockStore.KIND_MINUTES, now)) {
+            limitPkg = pkg;
+            limitSince = now;
+            handler.removeCallbacks(tick);
+            handler.postDelayed(tick, TICK_MS);
+        }
         LockStore.LockedApp app = lockedApp(pkg);
         if (app == null) return;
         if (store.freeNow(now)) return;
@@ -228,24 +239,31 @@ public class KaziAccessibilityService extends AccessibilityService {
         }
     }
 
+    /**
+     * One swipe is one scroll. A swipe sends a burst of scroll events while the
+     * list moves, so events closer together than {@link #GESTURE_GAP_MS} are
+     * the same swipe; how long anyone watches a post never costs anything.
+     */
     private void onScroll(String pkg) {
-        // A blocked time may have started while the app was open.
-        if (lockIfBlocked(pkg, System.currentTimeMillis())) return;
-        LockStore.LockedApp app = lockedApp(pkg);
-        if (app == null) return;
-        boolean mixed = LockStore.KIND_MIXED.equals(app.kind);
-        if (!mixed && !LockStore.KIND_SCROLLS.equals(app.kind)) return;
         long now = System.currentTimeMillis();
+        // A blocked time may have started while the app was open.
+        if (lockIfBlocked(pkg, now)) return;
         if (now - foregroundSince < OPEN_GRACE_MS) return;
         boolean newGesture = now - lastScrollAt > GESTURE_GAP_MS;
         lastScrollAt = now;
-        if (!newGesture || store.freeNow(now)) return;
+        if (!newGesture) return;
+        LockStore.LockedApp app = lockedApp(pkg);
+        boolean mixed = app != null && LockStore.KIND_MIXED.equals(app.kind);
         if (mixed) {
             // Scrolling the home feed or a video's comments is free; only Shorts cost scrolls.
             if (mixedApp == null) return;
             setPart(detectPart(), now);
             if (part != PART_SHORTS || now - partSince < OPEN_GRACE_MS) return;
         }
+        // A swipe limit in a restriction window counts every swipe, free time or not.
+        if (!safePackages.contains(pkg) && store.countLimit(pkg, LockStore.KIND_SCROLLS, 1, now) && lockIfBlocked(pkg, now)) return;
+        if (app == null || (!mixed && !LockStore.KIND_SCROLLS.equals(app.kind))) return;
+        if (store.freeNow(now)) return;
         if (store.scrollsLeft() <= 0) {
             lock(app, LockStore.KIND_SCROLLS);
             return;
@@ -257,10 +275,16 @@ public class KaziAccessibilityService extends AccessibilityService {
     private boolean lockIfBlocked(String pkg, long now) {
         if (pkg == null || safePackages.contains(pkg)) return false;
         String id = store.blockedAppId(pkg, now);
+        String kind = KIND_BLOCKED;
+        if (id == null) {
+            id = store.limitReachedAppId(pkg, now);
+            kind = KIND_LIMIT;
+        }
         if (id == null) return false;
         stopTiming();
         stopWatching();
-        lockId(id, KIND_BLOCKED, false);
+        stopLimit();
+        lockId(id, kind, false);
         return true;
     }
 
@@ -284,6 +308,16 @@ public class KaziAccessibilityService extends AccessibilityService {
             if (store.secondsLeft() <= 0) lock(mixedApp, LockStore.KIND_MINUTES);
             else startTiming(mixedApp, now);
         }
+    }
+
+    /** Writes down the last stretch of time in a minutes-limit window and stops counting it. */
+    private void stopLimit() {
+        if (limitPkg != null && store != null) {
+            long now = System.currentTimeMillis();
+            store.countLimit(limitPkg, LockStore.KIND_MINUTES, (now - limitSince) / 1000.0, now);
+        }
+        limitPkg = null;
+        limitSince = 0;
     }
 
     private void stopWatching() {
@@ -371,6 +405,11 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     private void onTick() {
         long now = System.currentTimeMillis();
+        if (limitPkg != null) {
+            // Minutes in a restriction window count whether or not the app is locked.
+            store.countLimit(limitPkg, LockStore.KIND_MINUTES, (now - limitSince) / 1000.0, now);
+            limitSince = now;
+        }
         if (lockIfBlocked(foreground, now)) return;
         if (store.freeNow(now)) {
             // The unlock time arrived while playing: charge up to now, then stop.
@@ -411,6 +450,8 @@ public class KaziAccessibilityService extends AccessibilityService {
 
     /** Marks a lock caused by a blocked time or focus timer. */
     static final String KIND_BLOCKED = "blocked";
+    /** Marks a lock caused by a used-up limit in a restriction window. */
+    static final String KIND_LIMIT = "limit";
 
     private void lockId(String appId, String kind, boolean mixed) {
         long now = System.currentTimeMillis();
@@ -426,7 +467,7 @@ public class KaziAccessibilityService extends AccessibilityService {
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra(MainActivity.EXTRA_LOCKED_APP, appId);
-            if (kind != null && (mixed || KIND_BLOCKED.equals(kind))) intent.putExtra(MainActivity.EXTRA_LOCKED_KIND, kind);
+            if (kind != null && (mixed || KIND_BLOCKED.equals(kind) || KIND_LIMIT.equals(kind))) intent.putExtra(MainActivity.EXTRA_LOCKED_KIND, kind);
             startActivity(intent);
         }, HOME_SETTLE_MS);
     }

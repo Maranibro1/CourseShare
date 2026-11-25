@@ -136,6 +136,12 @@ as $$
        or t.verifier_key = me.email_key
        or (me.username_key is not null and t.verifier_key = me.username_key)
        or t.approved_by = me.id
+       -- Self-checked tasks of people who picked me and let me review them.
+       or t.owner_id in (
+         select r.id from kazi_accounts r
+         where (r.data->>'letFriendsReview') = 'true'
+           and (r.verifier_key = me.email_key or (me.username_key is not null and r.verifier_key = me.username_key))
+       )
   ),
   msgs as (
     select * from kazi_messages where from_id = p_actor or to_id = p_actor

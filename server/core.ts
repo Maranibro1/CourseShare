@@ -12,7 +12,7 @@
  * The session token arrives in the X-Kazi-Token header (or Authorization: Bearer).
  */
 import { applyAction, isActionName } from '../src/lib/actions';
-import { KaziError, cleanUsername, signInKey, applyClaudeVerdict, canApprove, childrenOf, claudeCanCheck, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
+import { KaziError, cleanUsername, signInKey, applyClaudeVerdict, canApprove, canReview, childrenOf, claudeCanCheck, createAccount, dailyTick, emptyData, isValidContact, normalizeContact } from '../src/lib/logic';
 import { questionsFor } from '../src/lib/questions';
 import { isValidTimeZone, withTimeZone } from '../src/lib/time';
 import type { ClaudeChecker, Verdict } from './claude';
@@ -464,7 +464,7 @@ export function createCore(options: CoreOptions) {
     const { data } = await repo.load(me);
     const task = data.tasks[taskId];
     const parentOfOwner = data.accounts[task?.ownerId ?? '']?.parentId === me;
-    if (!task || !(task.ownerId === me || parentOfOwner || canApprove(data, task, me))) throw new HttpError(404, 'Photo not found');
+    if (!task || !(task.ownerId === me || parentOfOwner || canApprove(data, task, me) || canReview(data, me, task.ownerId))) throw new HttpError(404, 'Photo not found');
     const bytes = await repo.getPhoto(taskId);
     const type = bytes && photoType(bytes);
     if (!bytes || !type) throw new HttpError(404, 'Photo not found');
