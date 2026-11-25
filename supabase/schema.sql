@@ -361,3 +361,6 @@ begin
     on conflict (id) do nothing;
   end if;
 end $$;
+
+-- ───────── End of file ─────────
+-- If this line made it into the SQL Editor, the whole file was pasted. Click Run.
