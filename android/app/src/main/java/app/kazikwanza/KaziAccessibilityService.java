@@ -246,8 +246,9 @@ public class KaziAccessibilityService extends AccessibilityService {
      */
     private void onScroll(String pkg) {
         long now = System.currentTimeMillis();
-        // A blocked time may have started while the app was open.
-        if (lockIfBlocked(pkg, now)) return;
+        // A blocked time may have started while the app was open. (Limits are checked per swipe below,
+        // so the tail of the swipe that used up a limit doesn't shut the app.)
+        if (lockIfBlocked(pkg, now, false)) return;
         if (now - foregroundSince < OPEN_GRACE_MS) return;
         boolean newGesture = now - lastScrollAt > GESTURE_GAP_MS;
         lastScrollAt = now;
@@ -260,8 +261,12 @@ public class KaziAccessibilityService extends AccessibilityService {
             setPart(detectPart(), now);
             if (part != PART_SHORTS || now - partSince < OPEN_GRACE_MS) return;
         }
-        // A swipe limit in a restriction window counts every swipe, free time or not.
-        if (!safePackages.contains(pkg) && store.countLimit(pkg, LockStore.KIND_SCROLLS, 1, now) && lockIfBlocked(pkg, now)) return;
+        // A swipe limit in a restriction window counts every swipe, free time or not: a limit of
+        // N allows N swipes, and the next one shuts the app (like running out of scrolls).
+        if (!safePackages.contains(pkg) && store.hasLimit(pkg, LockStore.KIND_SCROLLS, now)) {
+            if (lockIfBlocked(pkg, now, true)) return;
+            store.countLimit(pkg, LockStore.KIND_SCROLLS, 1, now);
+        }
         if (app == null || (!mixed && !LockStore.KIND_SCROLLS.equals(app.kind))) return;
         if (store.freeNow(now)) return;
         if (store.scrollsLeft() <= 0) {
@@ -271,12 +276,16 @@ public class KaziAccessibilityService extends AccessibilityService {
         store.spend(app, LockStore.KIND_SCROLLS, session, 1, now);
     }
 
-    /** Shuts an app that's in a blocked time or focus timer. Returns true if it did. */
+    /** Shuts an app that's in a blocked time or focus timer, or whose limit is used up. Returns true if it did. */
     private boolean lockIfBlocked(String pkg, long now) {
+        return lockIfBlocked(pkg, now, true);
+    }
+
+    private boolean lockIfBlocked(String pkg, long now, boolean limits) {
         if (pkg == null || safePackages.contains(pkg)) return false;
         String id = store.blockedAppId(pkg, now);
         String kind = KIND_BLOCKED;
-        if (id == null) {
+        if (id == null && limits) {
             id = store.limitReachedAppId(pkg, now);
             kind = KIND_LIMIT;
         }
