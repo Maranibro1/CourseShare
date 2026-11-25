@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The Supabase project the app talks to. The publishable key is meant to be public:
+# it's built into the app, and the database only answers the "kazi" function.
+# Repository variables KAZI_SUPABASE_URL / KAZI_SUPABASE_ANON_KEY override these.
+env:
+  KAZI_DEFAULT_SUPABASE_URL: https://mrdfpixentchudzytwwh.supabase.co
+  KAZI_DEFAULT_SUPABASE_KEY: sb_publishable_hQxSbKanzKyLlupsFq50bg_1M_VPZVd
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -60,8 +67,8 @@ jobs:
       # With neither, the app keeps everything on the phone.
       - name: Build the web app into Android
         env:
-          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL || env.KAZI_DEFAULT_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY || env.KAZI_DEFAULT_SUPABASE_KEY }}
           VITE_SYNC: ${{ vars.KAZI_SERVER_URL != '' && 'server' || '' }}
           VITE_API_URL: ${{ vars.KAZI_SERVER_URL }}
           VITE_PUBLIC_URL: ${{ vars.KAZI_WEB_URL || vars.KAZI_SERVER_URL }}
@@ -146,8 +153,8 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Build the website
         env:
-          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_URL: ${{ vars.KAZI_SUPABASE_URL || env.KAZI_DEFAULT_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.KAZI_SUPABASE_ANON_KEY || env.KAZI_DEFAULT_SUPABASE_KEY }}
           VITE_PUBLIC_URL: ${{ vars.KAZI_WEB_URL || format('{0}/', steps.pages.outputs.base_url) }}
           VITE_APK_URL: https://github.com/${{ github.repository }}/releases/download/android-latest/kazikwanza.apk
         run: npm run build
